@@ -1,6 +1,6 @@
 {
   "name": "dsh-ghidra",
-  "version": "0.9.4",
+  "version": "0.9.5",
   "description": "Ghidra bridge plugin for DeepSeek Harness (DSH): 218 reverse-engineering tools — import binaries, decompile, xrefs, search, script Ghidra, plus the full upstream GhidraMCP REST surface, served from a single Ghidra JVM.",
   "type": "module",
   "main": "index.js",
@@ -15,6 +15,7 @@
     "cordis.patch.yml",
     "README.md",
     "PATCHES.md",
+    "NOTICE.md",
     "sync-installed.mjs",
     "gen-mcp-tools.mjs",
     "UPSTREAM-SCHEMA-LIVE.json",
@@ -29,6 +30,7 @@
     "probe-in-tree-e2e.mjs",
     "probe-unified-e2e.mjs",
     "probe-mcp-start.mjs",
+    "probe-contrast.mjs",
     "kat-consts.py"
   ],
   "exports": {
