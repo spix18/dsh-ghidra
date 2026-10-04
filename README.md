@@ -1,5 +1,10 @@
 # dsh-ghidra
 
+[![npm version](https://img.shields.io/npm/v/dsh-ghidra?color=cb3837&label=npm)](https://www.npmjs.com/package/dsh-ghidra)
+[![npm downloads](https://img.shields.io/npm/dm/dsh-ghidra?color=cb3837)](https://www.npmjs.com/package/dsh-ghidra)
+[![license](https://img.shields.io/npm/l/dsh-ghidra?color=blue)](https://github.com/spix18/dsh-ghidra/blob/main/LICENSE)
+[![GitHub stars](https://img.shields.io/github/stars/spix18/dsh-ghidra?color=yellow)](https://github.com/spix18/dsh-ghidra)
+
 **Ghidra bridge plugin for DeepSeek Harness (DSH)** — gives DSH (and any agent running in it) a full
 reverse-engineering workbench: import a binary, analyze it, decompile functions, list
 functions/strings/segments/imports/exports, walk xrefs and call graphs, disassemble, read memory,
@@ -7,6 +12,44 @@ functions/strings/segments/imports/exports, walk xrefs and call graphs, disassem
 **composite analysis** (call graph, instruction search, hashing, data flow) and **malware triage**
 (crypto-constant tables, behavioural APIs, IOCs, anti-analysis clues) — all as DSH tools, usable from
 any project.
+
+## Install
+
+**Requirements:** Windows · Ghidra 12.x · Python 3.13 with `pyghidra` (`py -3.13 -m pip install pyghidra`) · Node ≥ 20 · DSH ≥ 0.2
+
+```bash
+# 1. install the plugin into your DSH profile
+dsh plugin --profile web add dsh-ghidra
+
+# 2. restart DSH  (browser-half changes need a restart)
+# 3. open  Settings → Ghidra  in the sidebar, then press  "Download Ghidra"
+#    → fetches the latest Ghidra release into the plugin's own data dir and configures it for you
+```
+
+That's it — after step 3 the plugin is fully set up. Ask the agent for `ghidra_open <path-to-binary>`
+and start working. Everything the plugin owns lives under
+`<DSH_HOME>\profiles\web\node_modules\dsh-ghidra-home\` (Ghidra install, projects cache, logs).
+
+<details>
+<summary>Other ways to install / verify</summary>
+
+```bash
+# from a local checkout (editable, copy-style install)
+git clone https://github.com/spix18/dsh-ghidra
+dsh plugin --profile web add "file:$PWD/dsh-ghidra"
+
+# already have Ghidra? point the plugin at it instead of downloading
+#   Settings → Ghidra → "Ghidra install directory (optional)" → Browse…
+
+# health check without the GUI
+node <profile>/node_modules/dsh-ghidra/verify-load.mjs <profile>/node_modules/dsh-ghidra
+```
+
+After editing a local checkout, re-sync the installed copy:
+`node sync-installed.mjs` (web + headless, SHA256-checked).
+</details>
+
+## Features
 
 - **218 tools** = 47 native (PyGhidra bridge) + 3 lifecycle + 168 generated from the upstream
   [GhidraMCP](https://github.com/bethington/ghidra-mcp) REST surface (226 endpoints).
@@ -19,9 +62,6 @@ any project.
   picker, 12 hot-reloadable config fields; no DSH restart needed for config changes).
 - **Verification harnesses ship with the package** (`verify-load.mjs`, `verify-tools.mjs`,
   `probe-*.mjs`) so you can check the install on your own machine.
-
-Requirements: Windows, Ghidra 12.x, `py -3.13` with `pyghidra`, Node ≥ 20, DSH ≥ 0.2.
-Install: `dsh plugin --profile web add dsh-ghidra` (or `file:` for a local checkout), then restart DSH.
 
 ## Support
 
@@ -116,7 +156,12 @@ Ghidra 12 的 headless **Java 脚本**加载有上游 bug（NSA/ghidra#9551，�
 
 ## 安装 / 更新
 
-装进某个 profile（本机是 `web` 与 `headless`）：
+**从 npm 安装（推荐）：**
+
+    dsh plugin --profile web add dsh-ghidra
+    # 然后重启 DSH → 侧边栏 设置 → Ghidra → 按 "Download Ghidra" 一键装好 Ghidra
+
+**从本地源码安装（开发用）：**
 
     dsh plugin --profile web add "file:C:/Users/Administrator/.dsh/plugins/ghidra-bridge"
 
