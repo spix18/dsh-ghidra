@@ -1,0 +1,82 @@
+{
+  "name": "dsh-ghidra",
+  "version": "0.8.3",
+  "description": "Ghidra bridge plugin for DeepSeek Harness (DSH): 218 reverse-engineering tools — import binaries, decompile, xrefs, search, script Ghidra, plus the full upstream GhidraMCP REST surface, served from a single Ghidra JVM.",
+  "type": "module",
+  "main": "index.js",
+  "icon": "./icon.svg",
+  "files": [
+    "index.js",
+    "client.js",
+    "lib",
+    "scripts",
+    "locale",
+    "icon.svg",
+    "cordis.patch.yml",
+    "README.md",
+    "PATCHES.md",
+    "sync-installed.mjs",
+    "gen-mcp-tools.mjs",
+    "UPSTREAM-SCHEMA-LIVE.json",
+    "verify-load.mjs",
+    "verify.mjs",
+    "verify-tools.mjs",
+    "verify-batch3.mjs",
+    "verify-batch4.mjs",
+    "verify-mcp-e2e.mjs",
+    "probe-v4-routes.mjs",
+    "probe-client-apply.mjs",
+    "probe-in-tree-e2e.mjs",
+    "probe-unified-e2e.mjs",
+    "probe-mcp-start.mjs",
+    "kat-consts.py"
+  ],
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./locale/*.json": "./locale/*.json",
+    "./package.json": "./package.json"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "keywords": [
+    "dsh",
+    "deepseek-harness",
+    "dsh-plugin",
+    "ghidra",
+    "pyghidra",
+    "ghidramcp",
+    "reverse-engineering",
+    "decompiler",
+    "disassembler",
+    "malware-analysis",
+    "mcp"
+  ],
+  "author": "spix18 <spix18@users.noreply.github.com> (https://github.com/spix18)",
+  "funding": "https://ko-fi.com/spix18",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/spix18/dsh-ghidra.git"
+  },
+  "homepage": "https://github.com/spix18/dsh-ghidra#readme",
+  "bugs": {
+    "url": "https://github.com/spix18/dsh-ghidra/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "inject": [
+        "@deepseek-ai/dsh-client-connection",
+        "@deepseek-ai/dsh-client-ui-settings"
+      ],
+      "platform": "web"
+    }
+  }
+}

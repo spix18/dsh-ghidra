@@ -1,0 +1,1 @@
+{"meta": {"title": "Ghidra Bridge", "description": "Ghidra reverse-engineering bridge: import binaries, decompile and operate via persistent PyGhidra + GhidraMCP servers. Config is hot-reloadable from the plugin settings page."}}

@@ -1,0 +1,17 @@
+# upstream GhidraMCP sources (not ours to redistribute — see README/PATCHES for provenance)
+upstream-src/
+upstream-rel/
+
+# build / test artefacts
+*.log
+*.tgz
+__pycache__/
+*.pyc
+
+# local data root (Ghidra install, projects, logs live outside the package anyway)
+.dsh-ghidra-home/
+dsh-ghidra-home/
+
+node_modules/
+.DS_Store
+Thumbs.db
