@@ -1,6 +1,6 @@
 {
   "name": "dsh-ghidra",
-  "version": "0.8.4",
+  "version": "0.9.4",
   "description": "Ghidra bridge plugin for DeepSeek Harness (DSH): 218 reverse-engineering tools — import binaries, decompile, xrefs, search, script Ghidra, plus the full upstream GhidraMCP REST surface, served from a single Ghidra JVM.",
   "type": "module",
   "main": "index.js",
