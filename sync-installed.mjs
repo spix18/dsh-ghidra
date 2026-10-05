@@ -12,6 +12,7 @@ const PROFILES = ['web', 'headless']
 const FILES = ['index.js', 'client.js', 'package.json', 'cordis.patch.yml', 'README.md', 'icon.svg',
   'locale/en.json', 'locale/zh.json',
   'lib/paths.js', 'lib/ghidra.js', 'lib/run.js', 'lib/socket.js', 'lib/mcp.js', 'lib/mcp-tools.js',
+  'lib/skill.js', 'skills/dsh-ghidra/SKILL.md',
   'scripts/DecompileBridge.py']
 const sha = (p) => createHash('sha256').update(readFileSync(p)).digest('hex')
 

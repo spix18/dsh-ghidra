@@ -13,7 +13,12 @@ const ctx = {
   effect: (f) => effects.push(f),
   log: () => {},
   jobs: { start: async () => { throw new Error('no jobs in E2E') } },
-  tools: { register(t) { toolsMap.set(t.name, t) } },
+  tools: { register(t) { toolsMap.set(t.name, t); return () => { toolsMap.delete(t.name) } } },
+  inject(names, cb) {
+    const p = {}
+    for (const n of names) if (n === 'webServer') p.webServer = { exact: new Map(), prefixes: new Map(), register() { return () => {} } }
+    return cb(p)
+  },
 }
 installed.apply(ctx, installed.Config({}))
 

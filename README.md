@@ -60,7 +60,13 @@ After editing a local checkout, re-sync the installed copy:
   release from GitHub and installs it there.
 - **Settings section** — a `Settings → Ghidra` page (status, health check/doctor, download, folder
   picker, 12 hot-reloadable config fields; no DSH restart needed for config changes).
-- **Verification harnesses ship with the package** (`verify-load.mjs`, `verify-tools.mjs`,
+- **Bundled agent skill** — `skills/dsh-ghidra/SKILL.md` is registered into DSH's skill registry at
+  load time, so the agent knows *when* this plugin is the right tool (and when it is not) before it
+  starts calling anything.
+- **Only reachable tools are advertised** — with no bridge and no REST server running the plugin
+  exposes 5 entry points instead of 218, and reports the hidden groups, the reason and the fix.
+  `ghidra_open` / `ghidra_mcp_start` bring the rest back in the same session.
+- **Verification harnesses ship with the package** (`verify-load.mjs`, `probe-availability.mjs`,
   `probe-*.mjs`) so you can check the install on your own machine.
 
 ## Support
@@ -120,6 +126,37 @@ Ghidra 12 的 headless **Java 脚本**加载有上游 bug（NSA/ghidra#9551，�
 
 写侧改动**不会**自动落盘：会话结束（`ghidra_close` / 插件卸载 / DSH 退出）时会自动保存，
 中途想立刻确认请调 `ghidra_save`，之后的判据永远是**重开一次读回来**。
+
+## 随包技能与工具可用性（v0.10.0）
+
+**随包技能。** `skills/dsh-ghidra/SKILL.md` 在插件加载时注册进 DSH 的运行时技能注册表
+（`ctx.skills.register()`，`source: 'runtime'`）。为什么不能只把文件放进包里：DSH 的技能文件系统
+provider 只扫 project / user / bundled 三类根，**不会去翻 node_modules 里的插件目录** ——
+光有文件永远不会被发现，技能必须跟着插件注册才活。技能内容的核心是**路由**，即「什么时候该用它、
+什么时候不该用」：原生可执行/库/驱动/固件 → 用它；JavaScript/Electron/ASAR/源码、压缩包、
+.NET 托管程序集 → **明确说不用它**（Ghidra 会把托管程序集当不透明原生 blob 导入，据此得出的
+结论全是错的）。另有「先看概览再动手」「区分观察 / 推断 / 未知」「写侧改动要 `ghidra_save` 才落盘」
+「收尾 `ghidra_close`」等纪律。
+
+**只广告现在跑得起来的工具。** 218 个工具里只有 5 个不需要任何服务器
+（`ghidra_status`、`ghidra_open`、`ghidra_mcp_start/stop/status`）。桥或 REST 服务器没跑时，
+其余 213 个**不再注册进工具表** —— 模型看不到，也就不会去调一个必然失败的工具。
+`ghidra_status` 与 `GET /api/dsh-ghidra/status` 都返回 `toolAvailability`：
+
+```
+{ "total": 218, "advertised": 5,
+  "hidden": [
+    { "group": "bridge", "label": "PyGhidra bridge", "count": 45,
+      "reason": "not_running", "remediation": "call ghidra_open on a binary" },
+    { "group": "mcp", "label": "upstream GhidraMCP REST server", "count": 168,
+      "reason": "not_running", "remediation": "call ghidra_mcp_start (unified mode needs ghidra_open first)" } ],
+  "groups": { "bridge": { "available": false, "tools": 45 }, "mcp": { "available": false, "tools": 168 } } }
+```
+
+`ghidra_open` 成功 → 桥的 45 个立刻回来；`ghidra_mcp_start` 成功 → REST 的 168 个回来；
+服务器停掉则同步撤掉（`ghidra_mcp_stop`、面板上的停止按钮、任何一次 `ghidra_status` 都会同步）。
+**没有工具会在门控里丢失**：`advertised + Σhidden = 218`，有断言守着。代价是注册表变化会让那一次
+prompt 前缀缓存失效（每次 start/stop 一次），换来的是「模型看到的工具集 = 现在真能跑的工具集」。
 
 ## 环境要求（本机已配好）
 
@@ -253,7 +290,10 @@ Ghidra 12 的 headless **Java 脚本**加载有上游 bug（NSA/ghidra#9551，�
 ## 验收
 
     node sync-installed.mjs               # 先把源码同步进两个已装副本（否则验的是旧代码）
-    node verify-load.mjs [已装副本目录]   # 加载路径 + 218 个工具注册 + 桥工具 params 回归 → 10/10
+    node verify-load.mjs [已装副本目录]   # 加载路径 + 218 个工具定义 + 门控只广告 5 个 +
+                                          #   随包技能注册 + 桥工具 params 回归   → 21/21
+    node probe-availability.mjs [副本]    # 工具可用性门控：冷启动 5 → 服务器上线 173 →
+                                          #   下线回 5，撤门干净且幂等              → 14/14
     node verify.mjs                       # lib 层：探测→导入→起服务器→op 往返 → 15/15
     node verify-tools.mjs                 # 工具层：批次 1/2 全部实调 + 失败用例 → 85/85
     node verify-batch3.mjs                # 批次 3 的 14 个新工具（含落盘回归）   → 77/77

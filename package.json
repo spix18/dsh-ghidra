@@ -1,7 +1,7 @@
 {
   "name": "dsh-ghidra",
-  "version": "0.9.5",
-  "description": "Ghidra bridge plugin for DeepSeek Harness (DSH): 218 reverse-engineering tools — import binaries, decompile, xrefs, search, script Ghidra, plus the full upstream GhidraMCP REST surface, served from a single Ghidra JVM.",
+  "version": "0.10.0",
+  "description": "Ghidra bridge plugin for DeepSeek Harness (DSH): 218 reverse-engineering tools — import binaries, decompile, xrefs, search, script Ghidra, plus the full upstream GhidraMCP REST surface, served from a single Ghidra JVM. Ships an agent skill and only advertises the tools that can actually run right now.",
   "type": "module",
   "main": "index.js",
   "icon": "./icon.svg",
@@ -9,6 +9,7 @@
     "index.js",
     "client.js",
     "lib",
+    "skills",
     "scripts",
     "locale",
     "icon.svg",
@@ -31,6 +32,7 @@
     "probe-unified-e2e.mjs",
     "probe-mcp-start.mjs",
     "probe-contrast.mjs",
+    "probe-availability.mjs",
     "kat-consts.py"
   ],
   "exports": {

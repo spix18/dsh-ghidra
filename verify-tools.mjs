@@ -34,9 +34,16 @@ const effects = []
 const jobs = []
 const ctx = {
   effect(fn) { effects.push(fn) },
-  tools: { register(t) { tools.set(t.name, t) } },
+  // register 必须返回 disposer：工具可用性门控靠它把「服务器没跑」的工具撤下来
+  tools: { register(t) { tools.set(t.name, t); return () => { tools.delete(t.name) } } },
   jobs: { start(spec) { const id = 'job-' + jobs.length; const handle = spec.run(); jobs.push({ id, spec, handle }); return id } },
   logger: { info() {}, warn() {}, error() {} },
+  // 软注入：真实 ctx 按服务名回调，缺服务时对应字段为 undefined（插件内部有防御分支）
+  inject(names, cb) {
+    const p = {}
+    for (const n of names) if (n === 'webServer') p.webServer = { exact: new Map(), prefixes: new Map(), register() { return () => {} } }
+    return cb(p)
+  },
 }
 
 const mod = await import(pathToFileURL(join(INSTALLED, 'index.js')).href)

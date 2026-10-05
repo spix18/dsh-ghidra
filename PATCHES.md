@@ -430,13 +430,94 @@ java 服务器是有意保留的）。
 - **生效条件**：重启 DSH 后浏览器半才加载（client.js 由 `/plugins/dsh-ghidra/client.js` serve），
   插件管理页出现 Ghidra 桥卡片；`GET /api/dsh-ghidra/status` 可从宿主机验证。
 
+## v0.10.0 — 随包技能 + 工具可用性门控（对照 REA 的 skill / tool-availability 契约）
+
+来源是一次对 [morluto/rea](https://github.com/morluto/rea) 的深读：它的 Ghidra provider 只声明
+**22 个 capability**（而不是把 122 个工具全摊开），`tools/list` **只广告当前 target/provider/policy
+下真能调用的操作**，并用稳定的 `availability reason + remediation` 解释被隐藏的部分；另有一份
+`skills/reverse-engineer-anything/SKILL.md` 负责「什么时候该用、什么时候不该用」。dsh-ghidra
+此前两个都没有：218 个工具无条件注册，模型看不出哪些是死的；也没有任何东西告诉模型
+「.NET 托管程序集不要往 Ghidra 里塞」。本次把这两件事补齐 —— **都不碰分析引擎**。
+
+### 18. `ctx.skills.register()` —— 包里的 SKILL.md 必须跟着插件注册才活
+
+新增 `lib/skill.js`（行级 frontmatter 解析，缺字段返回 `null` 而不是抛）与
+`skills/dsh-ghidra/SKILL.md`（正文 10102 字符 / 98 行），在 `apply()` 里用
+`ctx.inject(['skills'], (sctx) => ...)` 注册成运行时技能（`source: 'runtime'`）。
+
+**为什么不只是把文件放进包里**：`dsh-skill-filesystem` 的默认根只有 project / custom / user /
+bundled 四类（`discoverRoot` 认 `<dir>/SKILL.md` 与 `<dir>/<name>.md` 两种形态），
+**不会去扫 `node_modules` 里的插件目录** —— 文件放着永远不会被发现。注册路径两条：
+`ctx.skills.register(definition)`（内存技能，随插件生命周期）或 `ctx.skills.registerProvider()`
+（dsh-skill-hub 走的这条）。这里选前者：简单，且插件卸载时技能自然消失。
+校验只要求 `name` 匹配 `/^[a-z0-9]+(?:-[a-z0-9]+)*$/`、`description` 非空、`source` 是字符串，
+默认 `invocation = { modelInvocable: true, userInvocable: true }`。
+
+技能正文的核心是**路由**而不是工具手册：原生可执行/库/驱动/固件 → 用它；
+JavaScript / Electron / ASAR / 源码、压缩包、.NET 托管程序集 → **明确说不用它**
+（Ghidra 会把托管程序集当不透明原生 blob 导入，据此得出的结论全是错的）；
+运行时行为问题 → 静态分析答不了，直说缺什么观察手段，不要用推断冒充事实。
+另有「先看概览再动手」「区分观察 / 推断 / 未知」「写侧改动要 `ghidra_save` 才落盘」等纪律。
+
+### 19. `ctx.tools.register()` 的 disposer —— 只广告现在跑得起来的工具
+
+`dsh-tools` 的 `register()` 返回 `layers.effect(...)`，即**一个可用的 disposer**；
+`ScopedLayers` 的变更回调会 `ctx.emit("tools/change")`。所以动态增删工具是官方支持的路径。
+
+`apply()` 里新增一个 `gate`：`bridge`（45 个，判据 `state.port`）与 `mcp`（168 个，判据
+`mcpHealth(mcpPort).ok`）各持 `pending / live`；`setGate(key, ok)` 幂等翻转 ——
+true 时把 pending 逐个 `ctx.tools.register` 收进 live，false 时 `while (live.length) live.pop()()`。
+常驻集合只有 5 个：`ghidra_status`、`ghidra_open`、`ghidra_mcp_start/stop/status`。
+同步点：`apply` 末尾、`openFlow` 成功后、`ghidra_mcp_start/stop` 的两个分支、
+`stopServer()` 内、以及 `ghidra_status` / `ghidra_mcp_status` / `GET /status` / `POST /mcp-stop`
+每次被调用时（**agent 只调工具、不调路由，所以工具入口必须自己同步**）。
+`gateSnapshot()` 产出 `{total, advertised, hidden:[{group,label,count,reason,remediation}], groups}`，
+由 `ghidra_status`、`ghidra_mcp_status` 与状态路由三处上报。
+
+**代价与取舍**：注册表变化会让那一次 prompt 前缀缓存失效（每次 start/stop 一次）。
+换来的是「模型看到的工具集 = 现在真能跑的工具集」，以及一个可诊断的失败面 ——
+以前 agent 要自己发现「ghidra_decompile 报『服务器未运行』」，现在是它压根看不到这个工具，
+而 `ghidra_status` 直接告诉它被隐藏的是哪 45 个、为什么、以及怎么补救。
+
+### 验收
+
+- `node verify-load.mjs` → **21/21**（重写：不再断言「注册了 218 个」，改成断言
+  【定义总数 218 = 常驻 5 + 桥门 45 + REST 门 168】+【冷启动只注册 5 个】+【`advertised + Σhidden = 218`】
+  +【随包技能注册且带 `whenToUse` 与排除指引】）。桩 ctx 改成**按名字分发软注入**
+  （`inject(names, cb)` 只给 `webServer` / `skills`），`tools.register` 用 Map 且**同名重复注册抛错**
+  —— 撤门没撤干净会被立刻抓到；另用 `net.createServer().listen(0)` 取一个**确定空闲的端口**，
+  否则本机真跑着 8123 时验收结果会随环境漂移。
+- 新增 `node probe-availability.mjs` → **14/14**：用一个 stub `/health` 服务器冒充上游 REST，
+  走完「冷启动 5 → 上线 173（168 个名字与生成器输出完全一致）→ 下线回 5」并横跳 3 轮，
+  全程断言**无重复注册**（即 disposer 幂等、撤门干净）。
+- `node probe-v4-routes.mjs <副本>` → 16/16；`node probe-client-apply.mjs` → 26/26；
+  `node probe-contrast.mjs` → 21/21；`node verify.mjs` → ALL CHECKS PASSED。
+
+### ★ 20. `verify-tools.mjs` / `verify-batch3.mjs` / `verify-batch4.mjs` / `verify-mcp-e2e.mjs` 的 ctx 桩一直是坏的
+
+这四个 harness 从 v0.4.0（加 `ctx.inject(['webServer'], ...)` 状态路由）起就**再也跑不起来** ——
+它们的桩没有 `inject`，`apply` 第一行就 `TypeError: ctx.inject is not a function`，
+而它们还一直躺在 `package.json` 的 `files` 里发出去。本次一并修好：补 `inject`（按名字分发，
+`webServer` 给最小 `{exact, prefixes, register}`）、并让 `tools.register` 返回 disposer
+（门控要求）。**教训**：验收脚本自己也要有回归 —— 一个从不被运行的 harness 和被删掉没有区别，
+只是更贵（它还在包里占位、还让人以为覆盖到了）。
+
+### 清单（`package.json` v0.10.0）
+
+- `files` 新增 `skills`（目录）与 `probe-availability.mjs`；`lib` 已覆盖 `lib/skill.js`。
+- `sync-installed.mjs` 的 `FILES` 从 15 项加到 17 项（`lib/skill.js`、`skills/dsh-ghidra/SKILL.md`）
+  → `synced 34 files across 2 profiles, mismatches=0`。
+- **`files` 是显式清单不是 glob** —— 新增可发布文件必须手工登记，发布后必须 `tar -tzf` 解包核对
+  （0.9.4 就漏过 `probe-contrast.mjs`）。
+
 ## 修改 master 之后的重新安装
 `file:` 是**拷贝式**安装，改完 `C:\Users\Administrator\.dsh\plugins\ghidra-bridge` 里的源码后，
 必须把它同步进 `profiles/<profile>/node_modules/dsh-ghidra`，变更才会生效。
 
-**首选**：`node sync-installed.mjs` —— 把 28 个源文件（`index.js`、`client.js`、`package.json`、`cordis.patch.yml`、
-`README.md`、`icon.svg`、`locale/{en,zh}.json`、`lib/{ghidra,run,socket,mcp,mcp-tools}.js`、`scripts/DecompileBridge.py`）
-拷进 web + headless 两个已装副本，逐文件比对 SHA256，并清掉 `scripts/__pycache__`。
+**首选**：`node sync-installed.mjs` —— 把 17 个源文件（`index.js`、`client.js`、`package.json`、`cordis.patch.yml`、
+`README.md`、`icon.svg`、`locale/{en,zh}.json`、`lib/{paths,ghidra,run,socket,mcp,mcp-tools,skill}.js`、
+`skills/dsh-ghidra/SKILL.md`、`scripts/DecompileBridge.py`）拷进 web + headless 两个已装副本
+（共 34 个文件），逐文件比对 SHA256，并清掉 `scripts/__pycache__`。
 （也可重跑 `dsh plugin --profile <p> add "file:C:/Users/Administrator/.dsh/plugins/ghidra-bridge"`，
 但它只改一个 profile，且不会清字节码缓存。）
 

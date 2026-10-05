@@ -13,6 +13,7 @@ import { promisify } from 'node:util'
 import { Readable, Transform } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
 import { dataPaths, ensureDataPaths, pluginDataRoot } from './lib/paths.js'
+import { loadSkillDefinition, SKILL_FILE } from './lib/skill.js'
 const execFileP = promisify(execFile)
 
 export const name = 'ghidra-bridge'
@@ -107,12 +108,19 @@ function renderMcp(_args, value) {
 const state = { child: null, port: null, program: null, serverPid: 0, binaryPath: null, mcpPid: 0 }
 let currentConfig = null   // 最近一次 apply 解析出的配置快照（volatile ref 已解析成普通值）
 let activeDisposers = null // 上一轮注册的工具/路由 disposer（re-entry 先拆解再重注册）
+let currentGate = null     // 最近一次 apply 建的工具可用性门（见 apply 里的「可用性门控」）
 const toolCounts = { native: 0, lifecycle: 0, generated: 0 }
+// 不需要任何服务器就能跑的原生工具（其余 45 个原生工具都要 PyGhidra 桥在跑）。
+// 这几个必须常驻：它们是 agent 用来【发现】当前可用性并把它拉起来的入口，
+// 藏起来就等于把唯一的补救手段藏起来。
+const ALWAYS_AVAILABLE = new Set(['ghidra_status', 'ghidra_open'])
 // 三个 lifecycle 工具（其余 ghidra_mcp_* 都是生成的 REST 包装）
 const LIFECYCLE_TOOL_NAMES = new Set(['ghidra_mcp_start', 'ghidra_mcp_stop', 'ghidra_mcp_status'])
 // 后台任务状态（Ghidra 下载安装 / home 迁移）—— 跨 re-entry 共享，状态路由上报进度
 const installState = { running: false, phase: '', pct: 0, bytes: 0, total: 0, error: '', home: null, log: '' }
 const migrateState = { running: false, phase: '', error: '', from: null, to: null, ok: null }
+// 随包技能（skills/dsh-ghidra/SKILL.md → ctx.skills.register）的注册结果，状态路由上报
+const skillState = { registered: false, name: null, file: SKILL_FILE, error: '' }
 
 // ---- Ghidra 下载安装（GitHub 最新 release → 下载 → PowerShell 解压 → 校验）----
 // 后台执行（execFile 不阻塞宿主事件循环）；进度写 installState，状态路由上报。
@@ -246,6 +254,8 @@ const killServer = () => {
     state.port = null
     state.program = null
     state.binaryPath = null
+    // 桥没了 → 依赖它的工具必须立刻从模型视野里撤掉（unified 模式下 REST 服务器随桥一起死）
+    void currentGate?.sync()
     return { graceful: graceful, ms: Date.now() - started, pid: pid }
   }
 
@@ -290,13 +300,78 @@ export function apply(ctx, config) {
   toolCounts.native = 0
   toolCounts.lifecycle = 0
   toolCounts.generated = 0
-  const pushReg = (def) => {
+
+  // ---- 可用性门控：只把【当前真的能调用】的工具注册给模型 ----
+  // 动机（对照 REA 的 tool availability 契约）：把 168 个 ghidra_mcp_* 无条件注册出去，会让 agent
+  // 看到一整族必然失败的 schema —— 既误导（以为 REST 引擎可用），又白占 prompt 预算。
+  // 依赖不满足时它们只进 pending；条件满足的那一刻才 register，条件消失就 dispose。
+  // dsh-tools 的 register() 返回 disposer，注销会发 tools/change（唯一代价：那一次 prompt 前缀失效）。
+  const gate = {
+    // bridge：PyGhidra 桥在跑 → 45 个原生分析工具
+    bridge: { pending: [], live: [], ok: false, label: 'PyGhidra bridge', fix: 'call ghidra_open on a binary' },
+    // mcp：上游 GhidraMCP REST 服务器可达 → 168 个生成工具
+    mcp: { pending: [], live: [], ok: false, label: 'upstream GhidraMCP REST server', fix: 'call ghidra_mcp_start (unified mode needs ghidra_open first)' },
+  }
+  const setGate = (key, ok) => {
+    const g = gate[key]
+    if (g.ok === ok) return false
+    g.ok = ok
+    if (ok) {
+      for (const def of g.pending) g.live.push(ctx.tools.register(def))
+    } else {
+      while (g.live.length) { try { g.live.pop()() } catch { /* disposer 可能已失效 */ } }
+    }
+    return true
+  }
+  // 重新判定两个门。幂等，且从工具体 / 状态路由 / open / stop 之后都能安全调用。
+  async function syncAvailability() {
+    const cfg = currentConfig || {}
+    let changed = setGate('bridge', !!state.port)
+    const h = await mcpHealth(cfg.mcpPort || MCP_DEFAULT_PORT, 1500)
+    if (setGate('mcp', !!h.ok)) changed = true
+    return changed
+  }
+  // 供状态路由/工具上报：总量、当前广告量、以及被隐藏的组 + 原因 + 补救办法
+  const gateSnapshot = () => {
+    const total = toolCounts.native + toolCounts.lifecycle + toolCounts.generated
+    const gated = gate.bridge.pending.length + gate.mcp.pending.length
+    const live = gate.bridge.live.length + gate.mcp.live.length
+    const hidden = []
+    for (const key of ['bridge', 'mcp']) {
+      const g = gate[key]
+      if (!g.ok && g.pending.length) hidden.push({ group: key, label: g.label, count: g.pending.length, reason: 'not_running', remediation: g.fix })
+    }
+    return {
+      total,
+      advertised: total - gated + live,
+      hidden,
+      groups: {
+        bridge: { available: gate.bridge.ok, tools: gate.bridge.pending.length },
+        mcp: { available: gate.mcp.ok, tools: gate.mcp.pending.length },
+      },
+    }
+  }
+  currentGate = { gate, setGate, sync: syncAvailability, snapshot: gateSnapshot }
+  // re-entry 时把这一轮开着的门关掉（live disposer 只归门管，所以这里统一拆）
+  disposers.push(() => {
+    for (const key of ['bridge', 'mcp']) {
+      const g = gate[key]
+      while (g.live.length) { try { g.live.pop()() } catch { /* 已失效 */ } }
+    }
+  })
+
+  const pushReg = (def, need) => {
     // 三分类必须互斥：168 个生成工具也叫 ghidra_mcp_*，若按前缀一律算 lifecycle，
     // 会把它们同时算进 lifecycle 与 generated（常量），总数虚高成 386。只有这 3 个是 lifecycle。
     if (LIFECYCLE_TOOL_NAMES.has(def.name)) toolCounts.lifecycle += 1
     else if (def.name.startsWith('ghidra_mcp_')) toolCounts.generated += 1
     else toolCounts.native += 1
-    disposers.push(ctx.tools.register(def))
+    // 门控归属：显式 need 优先；否则原生工具里除 ALWAYS_AVAILABLE 之外都要桥。
+    // lifecycle 三个（start/stop/status）常驻 —— 它们是 agent 发现可用性并补救的唯一入口，藏起来等于把补救手段藏起来。
+    let key = need
+    if (!key && !LIFECYCLE_TOOL_NAMES.has(def.name) && !ALWAYS_AVAILABLE.has(def.name)) key = 'bridge'
+    if (key) gate[key].pending.push(def)
+    else disposers.push(ctx.tools.register(def))
     return def
   }
 
@@ -332,6 +407,8 @@ export function apply(ctx, config) {
     state.serverPid = srv.pid || 0
     state.binaryPath = binaryPath
     const info = await socketOp({ op: 'info' }, 30000)
+    // 桥起来了 → 45 个原生分析工具此刻才注册给模型（见 apply 里的「可用性门控」）
+    await syncAvailability()
     return { ok: true, port: srv.port, program: srv.program, pid: srv.pid || srv.child.pid, result: info }
   }
 
@@ -375,16 +452,19 @@ export function apply(ctx, config) {
 
   pushReg(defineTool({
     name: 'ghidra_status',
-    description: '检查 Ghidra 安装（路径/版本）、Python+pyghidra 是否就绪、桥接服务器是否在运行。调用其他 ghidra_* 工具前可先确认。',
+    description: '检查 Ghidra 安装（路径/版本）、Python+pyghidra 是否就绪、桥接服务器是否在运行，并报告当前【哪些工具真的可用】。调用其他 ghidra_* 工具前先看这里：被隐藏的工具族会在 toolAvailability 里给出原因与补救办法。',
     parameters: {},
     output: { schema: OUT, render },
     async execute() {
+      // 自愈门控：桥被外部杀掉/外部拉起时，agent 查状态这一步就把可用性对齐
+      await syncAvailability()
       return {
         ok: true,
         result: {
           ghidra: gh ? { home: gh.home, version: readVersion(gh.home), nonAscii: gh.nonAscii } : null,
           pyghidra: pyghidraInstalled(config.pythonVer) ? { pythonVer: config.pythonVer, installed: true } : { pythonVer: config.pythonVer, installed: false },
           server: state.port ? { running: true, port: state.port, program: state.program } : { running: false },
+          toolAvailability: gateSnapshot(),
         },
       }
     },
@@ -1174,6 +1254,8 @@ export function apply(ctx, config) {
         try {
           const res = await socketOp({ op: 'mcpServe', port: config.mcpPort, bind: '127.0.0.1' },
             (config.mcpStartupTimeoutSec || 180) * 1000)
+          // 起来了 → 168 个 ghidra_mcp_* 此刻才注册给模型
+          await syncAvailability()
           return {
             ok: !!(res && res.ok),
             port: res ? res.port : config.mcpPort,
@@ -1195,6 +1277,7 @@ export function apply(ctx, config) {
       })
       if (r.ok && r.pid) state.mcpPid = r.pid
       r.mode = 'standalone'
+      await syncAvailability()
       return r
     },
   }))
@@ -1209,6 +1292,7 @@ export function apply(ctx, config) {
       if (mode === 'unified' && state.port) {
         try {
           const res = await socketOp({ op: 'mcpStop' }, 30000)
+          await syncAvailability()
           return { ok: !!(res && res.ok), mode: 'unified', result: res }
         } catch (e) {
           return { ok: false, mode: 'unified', error: String(e?.message || e) }
@@ -1217,6 +1301,8 @@ export function apply(ctx, config) {
       const r = await mcpStop(config.mcpPort, state.mcpPid || 0)
       state.mcpPid = 0
       r.mode = 'standalone'
+      // 停了 → 168 个生成工具立刻从模型视野里撤掉
+      await syncAvailability()
       return r
     },
   }))
@@ -1227,6 +1313,8 @@ export function apply(ctx, config) {
     parameters: {},
     output: { schema: MCP_OUT, render: renderMcp },
     async execute() {
+      // 先自愈门控：外部启动/外部杀掉的服务器，靠这一步重新对齐（agent 查状态时顺手纠正）
+      await syncAvailability()
       const h = await mcpHealth(config.mcpPort, 5000)
       const mode = config.mcpMode || 'unified'
       let inProcess = null
@@ -1246,6 +1334,8 @@ export function apply(ctx, config) {
           bat: mcpBat,
           log: MCP_LOG_FILE,
           defaultPort: MCP_DEFAULT_PORT,
+          // 当前哪些工具真的注册给了模型（对照 REA 的 tool availability：广告集 = 可调用集）
+          toolAvailability: gateSnapshot(),
         },
       }
       if (!h.ok) out.error = h.error
@@ -1254,6 +1344,7 @@ export function apply(ctx, config) {
   }))
 
   for (const t of MCP_TOOLS) {
+    // 第二个参数 'mcp' = 门控：REST 服务器不可达时这 168 个不注册给模型
     pushReg(defineTool({
       name: t.name,
       description: t.description,
@@ -1262,8 +1353,41 @@ export function apply(ctx, config) {
       async execute(args) {
         return mcpCall(config.mcpPort, t, args, (config.mcpTimeoutSec || 900) * 1000)
       },
-    }))
+    }), 'mcp')
   }
+
+  // 首次判定：apply 时桥可能已经在跑（volatile 配置写入会重跑 apply，运行中的服务器跨 re-entry 保留），
+  // 也可能已经有外部启动的 REST 服务器 —— 两种情况都要立刻把对应的工具放出来。
+  void syncAvailability()
+
+  // ---- 随包技能：把 skills/dsh-ghidra/SKILL.md 注册进运行时技能注册表 ----
+  // 为什么走 ctx.skills.register 而不是让用户自己配 customSkillDirs：
+  // dsh-skill-filesystem 的默认根（project / user / bundled）**不扫 node_modules 里的插件目录**，
+  // 所以放在包里的 SKILL.md 光有文件永远不会被发现 —— 技能必须跟着插件注册才活。
+  // 软注入（同下面的 webServer）：headless 组合可能没挂 skills 服务，缺了就记一条日志跳过。
+  skillState.registered = false
+  skillState.error = ''
+  ctx.inject(['skills'], (sctx) => {
+    if (!sctx.skills || typeof sctx.skills.register !== 'function') {
+      skillState.error = 'skills service unavailable'
+      ctx.logger?.warn?.('[ghidra-bridge] ' + skillState.error)
+      return
+    }
+    const definition = loadSkillDefinition()
+    if (!definition) {
+      skillState.error = 'SKILL.md missing or frontmatter incomplete: ' + SKILL_FILE
+      ctx.logger?.warn?.('[ghidra-bridge] ' + skillState.error)
+      return
+    }
+    try {
+      disposers.push(sctx.skills.register(definition))
+      skillState.registered = true
+      skillState.name = definition.name
+    } catch (e) {
+      skillState.error = String(e?.message || e)
+      ctx.logger?.warn?.('[ghidra-bridge] skill registration failed: ' + skillState.error)
+    }
+  })
 
   // ---- 插件管理页的状态路由（回环-only；headless 无 webServer 时软注入静默跳过）----
   ctx.inject(['webServer'], (wctx) => {
@@ -1289,6 +1413,9 @@ export function apply(ctx, config) {
         if (req.method !== 'GET') { writeJson(res, 405, { error: 'method not allowed: ' + (req.method ?? '') }); return }
         const cfg = currentConfig || {}
         const mode = cfg.mcpMode || 'unified'
+        // 面板轮询就是一次自愈机会：外部启停的服务器在这里被重新对齐（currentGate 是模块级的，
+        // 路由 handler 跨 apply 复用也不会读到上一轮的门）
+        await currentGate?.sync()
         const h = await mcpHealth(cfg.mcpPort, 2500).catch((e) => ({ ok: false, error: String(e?.message || e) }))
         let inProcess = null
         if (mode === 'unified' && state.port) {
@@ -1306,6 +1433,9 @@ export function apply(ctx, config) {
             sharedProgram: mode === 'unified' && h.ok ? (state.program || null) : null,
           },
           tools: { native: toolCounts.native, lifecycle: toolCounts.lifecycle, generated: toolCounts.generated, total: toolCounts.native + toolCounts.lifecycle + toolCounts.generated },
+          // 广告集 = 可调用集：total 是定义总数，advertised 是此刻真的注册给模型的数量
+          toolAvailability: currentGate ? currentGate.snapshot() : null,
+          skill: skillState,
           ghidraHome: gh ? gh.home : null,
           ghidraHomeSource: gh ? (gh.source || null) : null,
           dataRoot: pluginDataRoot(),
@@ -1325,6 +1455,8 @@ export function apply(ctx, config) {
         const cfg = currentConfig || {}
         const result = await mcpStop(cfg.mcpPort, state.mcpPid || 0)
         state.mcpPid = 0
+        // 面板上的「停止」也要立刻撤掉 168 个生成工具（与 ghidra_mcp_stop 工具同款行为）
+        void currentGate?.sync()
         writeJson(res, 200, { ok: true, result: result })
       },
     })

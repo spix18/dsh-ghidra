@@ -38,9 +38,14 @@ const tools = new Map()
 const effects = []
 const ctx = {
   effect(fn) { effects.push(fn) },
-  tools: { register(t) { tools.set(t.name, t) } },
+  tools: { register(t) { tools.set(t.name, t); return () => { tools.delete(t.name) } } },
   jobs: { start() { return 'job-0' } },
   logger: { info() {}, warn() {}, error() {} },
+  inject(names, cb) {
+    const p = {}
+    for (const n of names) if (n === 'webServer') p.webServer = { exact: new Map(), prefixes: new Map(), register() { return () => {} } }
+    return cb(p)
+  },
 }
 const mod = await import(pathToFileURL(join(INSTALLED, 'index.js')).href)
 mod.apply(ctx, mod.Config ? mod.Config({}) : {})
