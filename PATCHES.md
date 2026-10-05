@@ -510,6 +510,60 @@ true 时把 pending 逐个 `ctx.tools.register` 收进 live，false 时 `while (
 - **`files` 是显式清单不是 glob** —— 新增可发布文件必须手工登记，发布后必须 `tar -tzf` 解包核对
   （0.9.4 就漏过 `probe-contrast.mjs`）。
 
+## v0.10.1 — 用真实的技能注册表验收，并修掉资源提示
+
+0.10.0 的验收用的是自建桩（`verify-load.mjs`），只能证明「我们按自己理解的契约注册了」。
+补一个**对着官方实现**跑的探针后，两处暴露出来：
+
+### 20. `resourceBase` —— 不传的话模型看到的是 provider 占位提示
+
+`dsh-skill` 的 `renderSkillContent()` 在没有 `resourceBase` 时渲染的是
+`Resources for this skill are managed by provider "runtime".`；传了
+`{ kind: 'directory', path: <技能目录> }` 才变成
+`Base directory for this skill: <路径>`。技能正文里提到的相对路径本来就没有基准，
+所以 `lib/skill.js` 现在导出 `SKILL_DIR` 并把它作为 `resourceBase.path` 传下去
+（渲染结果从 10336 字符变成 10468 字符）。`validateRuntimeSkill` / `validateCandidate`
+都不校验该字段，加它不会破坏注册。
+
+### 21. `probe-skill-registry.mjs` —— 契约以官方实现为准，不以我们的桩为准
+
+新增探针，用**真实的** `@deepseek-ai/dsh-skill` 跑完整链路，10/10：
+
+    SKILL.md loads with a complete definition — 10102 chars of body
+    registry.register() accepts the definition — disposer returned
+    registering announces skills/change so caches invalidate — 1 dispatch
+    the skill is listed from the runtime provider — source=runtime provider=runtime
+    the summary carries description and whenToUse — 345 char description, 505 char whenToUse
+    registry.get() returns the body — 10102 chars, invocation defaulted
+    renderSkillContent() wraps the body for the model — 10468 chars rendered
+    a duplicate registration is first-wins and warns — no-op disposer + warning
+    the disposer removes the skill again — removed
+    the happy path logged no other warnings — 1 expected warning
+
+写这个桩的过程中被官方实现纠正了两次，正是它值得存在的原因：
+
+- `SkillRegistry extends Service`（cordis），构造时调 `ctx.reflect.provide(name, self, check)`
+  —— 桩缺 `reflect` 直接 `TypeError`；
+- `notifyChange()` 走 `ctx.events.dispatch("emit", ["skills/change"])` 遍历监听器
+  —— 桩缺 `events` 时**注册已经落进 layer 了却在最后一步抛错**（技能列表里能看到、
+  `register()` 却报错），这种半成功最容易被误判成插件 bug。
+
+**层与可见性（读源码确认，不是推断）**：`register()` 用 `scopeOf(this.ctx)` 选层，
+宿主行与仓库插件是 unscoped ⇒ 落到 **global 层**；`collectFresh()` 的解析顺序是
+`[this.layers.global, ...this.layers.chainLayers(scope)]` 且逐层 `merged.set(name, entry)`
+（**近层覆盖远层**），所以 global 层的运行时技能对每个 agent 视图都可见，除非更近的一层有同名技能。
+
+⚠️ **`dsh-skill-hub` 的「设置 → 技能」目录里不会出现它**：那个目录是 hub 自己注册的
+`SkillHubProvider` 对文件系统根（bundled / project-* / user-*）的扫描结果，不枚举运行时注册表。
+技能对 agent 有效，只是不在那个列表里 —— 别把它当成「没注册上」。
+
+### 清单（`package.json` v0.10.1）
+
+- `files` 新增 `probe-skill-registry.mjs`；`sync-installed.mjs` 的 `FILES` 17 → 18 项
+  → `synced 36 files across 2 profiles, mismatches=0`。
+- 找不到 `@deepseek-ai/dsh-skill` 的机器上探针 **SKIP 退出 0**（不把环境缺失误报成插件坏了），
+  可用 `DSH_SKILL_PKG=<绝对路径>` 指定。
+
 ## 修改 master 之后的重新安装
 `file:` 是**拷贝式**安装，改完 `C:\Users\Administrator\.dsh\plugins\ghidra-bridge` 里的源码后，
 必须把它同步进 `profiles/<profile>/node_modules/dsh-ghidra`，变更才会生效。

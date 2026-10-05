@@ -138,6 +138,15 @@ provider 只扫 project / user / bundled 三类根，**不会去翻 node_modules
 结论全是错的）。另有「先看概览再动手」「区分观察 / 推断 / 未知」「写侧改动要 `ghidra_save` 才落盘」
 「收尾 `ghidra_close`」等纪律。
 
+注册走的是**全局层**（宿主插件所在层），而注册表解析顺序是 `[global, ...scopeChain]` 且**近层覆盖远层**
+（`dsh-skill` 的 `collectFresh()`），所以每个 agent 视图都能看到它，除非同名技能出现在更近的一层。
+`resourceBase` 指向 `skills/dsh-ghidra/`，模型看到的是 "Base directory for this skill: …" 而不是
+provider 托管的占位提示。`probe-skill-registry.mjs` 用**真实的** `@deepseek-ai/dsh-skill` 注册表
+跑一遍 `register → list → get → renderSkillContent → dispose`（10/10），契约以官方实现为准。
+
+⚠️ **在「设置 → 技能」里看不到它，这是预期的**：`dsh-skill-hub` 的目录是**文件系统扫描**
+（bundled / project-* / user-* 五类根），不枚举运行时注册表。技能对 agent 有效，只是不出现在那个列表里。
+
 **只广告现在跑得起来的工具。** 218 个工具里只有 5 个不需要任何服务器
 （`ghidra_status`、`ghidra_open`、`ghidra_mcp_start/stop/status`）。桥或 REST 服务器没跑时，
 其余 213 个**不再注册进工具表** —— 模型看不到，也就不会去调一个必然失败的工具。
@@ -294,6 +303,9 @@ prompt 前缀缓存失效（每次 start/stop 一次），换来的是「模型�
                                           #   随包技能注册 + 桥工具 params 回归   → 21/21
     node probe-availability.mjs [副本]    # 工具可用性门控：冷启动 5 → 服务器上线 173 →
                                           #   下线回 5，撤门干净且幂等              → 14/14
+    node probe-skill-registry.mjs         # 用真实的 @deepseek-ai/dsh-skill 注册表跑一遍
+                                          #   register→list→get→render→dispose     → 10/10
+                                          #   （找不到该包时 SKIP 退出 0）
     node verify.mjs                       # lib 层：探测→导入→起服务器→op 往返 → 15/15
     node verify-tools.mjs                 # 工具层：批次 1/2 全部实调 + 失败用例 → 85/85
     node verify-batch3.mjs                # 批次 3 的 14 个新工具（含落盘回归）   → 77/77
