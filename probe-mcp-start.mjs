@@ -3,8 +3,9 @@
 // 无 --file：只起服务器不载程序。服务器在 probe 退出后作为孤儿存活，留给运行中会话的
 // ghidra_mcp_* 工具直接用（ghidra_mcp_start 走采纳路径，不需要 spawn）。
 import { pathToFileURL } from 'node:url'
+import { installedDir } from './lib/dev-env.mjs'
 
-const copy = process.argv[2] || 'C:/Users/Administrator/.dsh/profiles/web/node_modules/dsh-ghidra'
+const copy = process.argv[2] || installedDir('web')
 const mod = await import(pathToFileURL(copy.replace(/\\/g, '/')).href + '/lib/mcp.js')
 
 const t0 = Date.now()

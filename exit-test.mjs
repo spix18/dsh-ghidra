@@ -5,10 +5,11 @@
 //   $env:EXIT_TOKEN='EXIT-...'; node exit-test.mjs write
 //   node exit-test.mjs read          # 读回并断言 plate === $env:EXIT_TOKEN
 import { spawnSync } from 'node:child_process'
+import { installedDir } from './lib/dev-env.mjs'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 
-const INSTALLED = 'C:/Users/Administrator/.dsh/profiles/web/node_modules/dsh-ghidra'
+const INSTALLED = installedDir('web')
 const BIN = 'C:\\Windows\\System32\\winver.exe'
 const TOKEN = process.env.EXIT_TOKEN || 'EXIT-NO-TOKEN'
 const phase = process.argv[2] || 'write'

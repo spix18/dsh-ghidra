@@ -1,11 +1,16 @@
 // v0.4.0 路由探针：doctor（只读全跑）+ migrate-home 校验路径（400 分支）+ install 状态字段在 /status
 // 不真跑 install（会启动 400MB 下载）与迁移复制（破坏性）——只验证接线与校验分支。
-import { fileURLToPath, pathToFileURL } from 'node:url'
+import { pathToFileURL } from 'node:url'
+import { dshToolsEntry, fileUrl, installedDir } from './lib/dev-env.mjs'
 import { readFileSync } from 'node:fs'
 
-const dir = process.argv[2] || fileURLToPath(new URL('.', import.meta.url))
+// 缺省加载**已装副本**：index.js 里有裸包名 import（@deepseek-ai/dsh-tools），只有副本的
+// node_modules 树能解析它；指向源码树会直接 ERR_MODULE_NOT_FOUND。
+const dir = process.argv[2] || installedDir('web')
+// 目录浏览器要一个真实存在的绝对路径；非 Windows 上没有 C:\Users。
+const REAL_DIR = process.platform === 'win32' ? 'C:\\Users' : '/usr'
 const indexPath = dir.endsWith('index.js') ? dir : dir.replace(/[\\/]+$/, '') + '/index.js'
-const dshTools = 'file:///C:/Users/Administrator/AppData/Roaming/npm/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-tools/lib/index.js'
+const dshTools = fileUrl(dshToolsEntry())
 
 const results = []
 const check = (name, ok, detail) => { results.push({ name, ok, detail }); console.log((ok ? 'PASS' : 'FAIL') + '  ' + name + (detail ? '  :: ' + detail : '')) }
@@ -67,8 +72,8 @@ if (byPath['/api/dsh-ghidra/doctor']) {
   check('doctor overall = essential 全过', typeof body?.essentialOk === 'number' && body.essentialOk === body?.essentialTotal,
     'essential=' + body?.essentialOk + '/' + body?.essentialTotal)
   const names = (body?.checks || []).map((c) => c.name)
-  check('doctor 含 PyGhidra launcher + headless.bat 检查',
-    names.some((n) => /launcher/i.test(n)) && names.some((n) => /headless\.bat/i.test(n)), names.join(' | '))
+  check('doctor 含 PyGhidra launcher + headless 启动器检查',
+    names.some((n) => /launcher/i.test(n)) && names.some((n) => /headless/i.test(n)), names.join(' | '))
 } else check('doctor 路由存在', false, 'missing')
 
 // 2. migrate-home 校验分支：from == to → 400
@@ -103,8 +108,8 @@ if (byPath['/api/dsh-ghidra/status']) {
   await byPath['/api/dsh-ghidra/status'].handler(mkReq('GET'), res)
   let body = null
   try { body = JSON.parse(res.body) } catch {}
-  check('/status 工具计数三分类互斥（47/3/168=218）',
-    body?.tools && body.tools.native === 47 && body.tools.lifecycle === 3 && body.tools.generated === 168 && body.tools.total === 218,
+  check('/status 工具计数三分类互斥（48/3/168=219）',
+    body?.tools && body.tools.native === 48 && body.tools.lifecycle === 3 && body.tools.generated === 168 && body.tools.total === 219,
     JSON.stringify(body?.tools))
   check('/status 含 install+migrate 进度字段', !!(body?.install && body?.migrate),
     'install=' + JSON.stringify(body?.install || null).slice(0, 80) + ' migrate=' + JSON.stringify(body?.migrate || null).slice(0, 80))
@@ -118,9 +123,9 @@ if (byPath['/api/dsh-ghidra/list-dir']) {
   const res2 = mkRes()
   await byPath['/api/dsh-ghidra/list-dir'].handler(mkReq('POST', JSON.stringify({ path: '' })), res2)
   let b2 = null; try { b2 = JSON.parse(res2.body) } catch {}
-  check('list-dir 空路径回驱动器列表', res2.statusCode === 200 && Array.isArray(b2?.drives) && b2.drives.length > 0, 'drives=' + JSON.stringify(b2?.drives))
+  check('list-dir 空路径回起点列表', res2.statusCode === 200 && Array.isArray(b2?.drives) && b2.drives.length > 0, 'drives=' + JSON.stringify(b2?.drives))
   const res3 = mkRes()
-  await byPath['/api/dsh-ghidra/list-dir'].handler(mkReq('POST', JSON.stringify({ path: 'C:\\\\Users' })), res3)
+  await byPath['/api/dsh-ghidra/list-dir'].handler(mkReq('POST', JSON.stringify({ path: REAL_DIR })), res3)
   let b3 = null; try { b3 = JSON.parse(res3.body) } catch {}
   check('list-dir 列真实目录', res3.statusCode === 200 && b3?.ok === true && Array.isArray(b3.dirs), 'path=' + b3?.path + ' dirs=' + (b3?.dirs || []).length + ' dotSegment=' + b3?.dotSegment)
 } else check('list-dir 路由存在', false, 'missing')
@@ -129,7 +134,7 @@ if (byPath['/api/dsh-ghidra/mkdir']) {
   await byPath['/api/dsh-ghidra/mkdir'].handler(mkReq('GET'), res)
   check('mkdir GET → 405', res.statusCode === 405, 'status=' + res.statusCode)
   const res2 = mkRes()
-  await byPath['/api/dsh-ghidra/mkdir'].handler(mkReq('POST', JSON.stringify({ parent: 'C:\\\\Users', name: '.hidden' })), res2)
+  await byPath['/api/dsh-ghidra/mkdir'].handler(mkReq('POST', JSON.stringify({ parent: REAL_DIR, name: '.hidden' })), res2)
   check('mkdir 拒绝点开头目录名', res2.statusCode === 400, 'status=' + res2.statusCode)
 } else check('mkdir 路由存在', false, 'missing')
 

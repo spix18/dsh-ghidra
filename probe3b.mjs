@@ -1,8 +1,9 @@
 // probe3b.mjs — 批次 3 第二轮反射（probe 的 match 是**子串**匹配，不是正则，故一个 probe 只问一个词）。
 import { join } from 'node:path'
+import { installedDir } from './lib/dev-env.mjs'
 import { pathToFileURL } from 'node:url'
 
-const INSTALLED = process.argv[2] || 'C:/Users/Administrator/.dsh/profiles/web/node_modules/dsh-ghidra'
+const INSTALLED = process.argv[2] || installedDir('web')
 const binary = process.argv[3] || 'C:\\Windows\\System32\\winver.exe'
 
 const tools = new Map()

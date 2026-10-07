@@ -1,9 +1,10 @@
 // bisect-save.mjs — 逐步重放 harness B3 的写侧序列，每一步之后写一个唯一 plate 标记并 ghidra_save，
 // 再看新服务器（从磁盘加载）读回来的是不是那个标记。第一个 LOST 的步骤就是让 headless 收尾保存失效的元凶。
 import { join } from 'node:path'
+import { installedDir } from './lib/dev-env.mjs'
 import { pathToFileURL } from 'node:url'
 
-const INSTALLED = 'C:/Users/Administrator/.dsh/profiles/web/node_modules/dsh-ghidra'
+const INSTALLED = installedDir('web')
 const BIN = 'C:\\Windows\\System32\\winver.exe'
 const t0 = Date.now()
 const ts = () => '[' + String(Date.now() - t0).padStart(6) + 'ms] '

@@ -5,14 +5,16 @@
 //   3) 服务器停掉后它们**被真正撤掉**（不是只改计数）—— 否则 agent 会拿到一个调用必失败的 schema。
 // 用法: node probe-availability.mjs [已装副本目录或 index.js 的路径]
 import { createServer } from 'node:http'
+import { fileUrl, installedDir, sourceDir } from './lib/dev-env.mjs'
+import { join } from 'node:path'
 import { createServer as createTcpServer } from 'node:net'
 
 const arg = process.argv[2]
 const PLUGIN = arg
   ? 'file:///' + arg.replace(/\\/g, '/').replace(/\/index\.js$/, '') + '/index.js'
-  : 'file:///C:/Users/Administrator/.dsh/profiles/web/node_modules/dsh-ghidra/index.js'
+  : fileUrl(join(installedDir('web'), 'index.js'))
 const mod = await import(PLUGIN)
-const { MCP_TOOLS } = await import('file:///C:/Users/Administrator/.dsh/plugins/ghidra-bridge/lib/mcp-tools.js')
+const { MCP_TOOLS } = await import(fileUrl(join(sourceDir(), 'lib', 'mcp-tools.js')))
 
 const fails = []
 const check = (label, cond, detail) => {
@@ -75,11 +77,11 @@ const hiddenOf = (ta, group) => ta?.hidden?.find((h) => h.group === group)
 // ---- 场景 1：什么都没跑 ----
 mod.apply(ctx, mod.Config({ mcpPort: port }))
 await new Promise((r) => setTimeout(r, 1200))
-const ALWAYS_ON = ['ghidra_status', 'ghidra_open', 'ghidra_mcp_start', 'ghidra_mcp_stop', 'ghidra_mcp_status']
+const ALWAYS_ON = ['ghidra_status', 'ghidra_open', 'ghidra_doctor', 'ghidra_mcp_start', 'ghidra_mcp_stop', 'ghidra_mcp_status']
 let ta = await snapshot()
-check('冷启动：只广告 5 个常驻工具', registered.size === 5 && ALWAYS_ON.every((n) => registered.has(n)),
+check('冷启动：只广告 6 个常驻工具', registered.size === 6 && ALWAYS_ON.every((n) => registered.has(n)),
   registered.size + ' 个: ' + [...registered.keys()].join(', '))
-check('冷启动：advertised=5 / total=218', ta?.advertised === 5 && ta?.total === 218, JSON.stringify({ a: ta?.advertised, t: ta?.total }))
+check('冷启动：advertised=6 / total=219', ta?.advertised === 6 && ta?.total === 219, JSON.stringify({ a: ta?.advertised, t: ta?.total }))
 check('冷启动：桥门 45 + REST 门 168 都被隐藏且带 reason/remediation',
   hiddenOf(ta, 'bridge')?.count === 45 && hiddenOf(ta, 'bridge')?.reason === 'not_running' && !!hiddenOf(ta, 'bridge')?.remediation
   && hiddenOf(ta, 'mcp')?.count === 168 && hiddenOf(ta, 'mcp')?.reason === 'not_running' && !!hiddenOf(ta, 'mcp')?.remediation,
@@ -94,10 +96,10 @@ const mcpNames = MCP_TOOLS.map((t) => t.name)
 const liveMcp = mcpNames.filter((n) => registered.has(n))
 check('服务器上线：168 个生成工具被注册', liveMcp.length === 168, liveMcp.length + '/168')
 check('服务器上线：注册的名字与生成器输出完全一致（无多无少）',
-  liveMcp.length === mcpNames.length && registered.size === 5 + 168,
+  liveMcp.length === mcpNames.length && registered.size === 6 + 168,
   'registered=' + registered.size)
-check('服务器上线：advertised=173，隐藏只剩桥门 45',
-  ta?.advertised === 173 && ta?.hidden?.length === 1 && hiddenOf(ta, 'bridge')?.count === 45,
+check('服务器上线：advertised=174，隐藏只剩桥门 45',
+  ta?.advertised === 174 && ta?.hidden?.length === 1 && hiddenOf(ta, 'bridge')?.count === 45,
   JSON.stringify({ a: ta?.advertised, hidden: ta?.hidden }))
 check('服务器上线：groups.mcp.available=true', ta?.groups?.mcp?.available === true, JSON.stringify(ta?.groups))
 check('全程没有重复注册（撤门撤干净了）', duplicateAttempts.length === 0, JSON.stringify(duplicateAttempts))
@@ -109,15 +111,15 @@ try {
   const out = await statusTool.execute({})
   toolTa = out?.toolAvailability || out?.result?.toolAvailability
 } catch (e) { check('ghidra_status.execute 未抛异常', false, String(e?.message || e)) }
-check('ghidra_status 的返回里带 toolAvailability（agent 不用查路由也能知道）', !!toolTa && toolTa.total === 218, JSON.stringify({ a: toolTa?.advertised, t: toolTa?.total }))
+check('ghidra_status 的返回里带 toolAvailability（agent 不用查路由也能知道）', !!toolTa && toolTa.total === 219, JSON.stringify({ a: toolTa?.advertised, t: toolTa?.total }))
 
 // ---- 场景 4：服务器下线 → 工具必须被真正撤掉 ----
 await stopStub()
 ta = await snapshot()
 check('服务器下线：168 个生成工具被撤掉', !mcpNames.some((n) => registered.has(n)),
   mcpNames.filter((n) => registered.has(n)).length + ' 个残留')
-check('服务器下线：回到 advertised=5，隐藏恢复 45+168',
-  registered.size === 5 && ta?.advertised === 5 && hiddenOf(ta, 'mcp')?.count === 168,
+check('服务器下线：回到 advertised=6，隐藏恢复 45+168',
+  registered.size === 6 && ta?.advertised === 6 && hiddenOf(ta, 'mcp')?.count === 168,
   JSON.stringify({ reg: registered.size, a: ta?.advertised, hidden: ta?.hidden?.map((h) => h.group + ':' + h.count) }))
 check('服务器下线：仍无重复注册', duplicateAttempts.length === 0, JSON.stringify(duplicateAttempts))
 
@@ -128,7 +130,7 @@ for (let i = 0; i < 3; i++) {
   await stopStub()
   await snapshot()
 }
-check('上线/下线横跳 3 轮后：注册表回到 5，无重复注册', registered.size === 5 && duplicateAttempts.length === 0,
+check('上线/下线横跳 3 轮后：注册表回到 6，无重复注册', registered.size === 6 && duplicateAttempts.length === 0,
   'registered=' + registered.size + ' dup=' + duplicateAttempts.length)
 
 console.log('')

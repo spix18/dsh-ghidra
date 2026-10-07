@@ -2,10 +2,11 @@
 // volume-test 证明：只做 19 个写 op → 落盘 OK。tx-probe 证明：只做读 op + 1 个写 → 落盘 OK。
 // 本脚本把两者合起来（与 harness 的真实顺序一致），并在读后/写后各探一次事务。
 import { spawnSync } from 'node:child_process'
+import { installedDir } from './lib/dev-env.mjs'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 
-const INSTALLED = 'C:/Users/Administrator/.dsh/profiles/web/node_modules/dsh-ghidra'
+const INSTALLED = installedDir('web')
 const BIN = 'C:\\Windows\\System32\\winver.exe'
 const t0 = Date.now()
 const ts = () => '[' + String(Date.now() - t0).padStart(6) + 'ms] '

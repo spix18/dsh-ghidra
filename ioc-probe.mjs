@@ -5,9 +5,10 @@
 //
 //   node ioc-probe.mjs
 import { join } from 'node:path'
+import { installedDir } from './lib/dev-env.mjs'
 import { pathToFileURL } from 'node:url'
 
-const INSTALLED = 'C:/Users/Administrator/.dsh/profiles/web/node_modules/dsh-ghidra'
+const INSTALLED = installedDir('web')
 
 const tools = new Map()
 const effects = []

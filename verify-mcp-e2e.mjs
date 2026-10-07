@@ -1,9 +1,10 @@
 // MCP 桥真实 E2E：对 8123 上已运行的 ghidraMCPHeadless（winver.exe 已加载）
 // 验证：mcpStart 采纳路径 → 只读工具 → 写工具（create_label）→ 读回 → 删除 → ghidra_mcp_stop 优雅退出
 import { pathToFileURL } from 'node:url'
+import { installedDir } from './lib/dev-env.mjs'
 import { ok, strictEqual } from 'node:assert'
 
-const dir = process.argv[2] || 'C:\\Users\\Administrator\\.dsh\\profiles\\web\\node_modules\\dsh-ghidra'
+const dir = process.argv[2] || installedDir('web')
 const mod = await import(pathToFileURL(dir.replace(/\\/g, '/').replace(/\/index\.js$/, '') + '/index.js').href)
 const installed = mod.default?.name === 'ghidra-bridge' ? mod.default : mod
 

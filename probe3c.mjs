@@ -1,8 +1,9 @@
 // probe3c.mjs — 确认「分析选项」的真实键名与内容（probe {analysis:true}）。
 import { join } from 'node:path'
+import { installedDir } from './lib/dev-env.mjs'
 import { pathToFileURL } from 'node:url'
 
-const INSTALLED = process.argv[2] || 'C:/Users/Administrator/.dsh/profiles/web/node_modules/dsh-ghidra'
+const INSTALLED = process.argv[2] || installedDir('web')
 const binary = process.argv[3] || 'C:\\Windows\\System32\\winver.exe'
 
 const tools = new Map()

@@ -5,9 +5,10 @@
 //
 // 结论会直接打印出来，不参与验收。
 import { join } from 'node:path'
+import { installedDir } from './lib/dev-env.mjs'
 import { pathToFileURL } from 'node:url'
 
-const INSTALLED = process.argv[2] || 'C:/Users/Administrator/.dsh/profiles/web/node_modules/dsh-ghidra'
+const INSTALLED = process.argv[2] || installedDir('web')
 const binary = process.argv[3] || 'C:\\Windows\\System32\\winver.exe'
 
 const tools = new Map()

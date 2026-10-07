@@ -3,10 +3,11 @@
 //   EARLY 在 LATE 不在  → 落盘点在会话早期（headless 在脚本返回前就保存了）
 //   两个都在            → 落盘点在会话结束 ✓（harness 的丢失另有原因）
 import { spawnSync } from 'node:child_process'
+import { installedDir } from './lib/dev-env.mjs'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 
-const INSTALLED = 'C:/Users/Administrator/.dsh/profiles/web/node_modules/dsh-ghidra'
+const INSTALLED = installedDir('web')
 const BIN = 'C:\\Windows\\System32\\winver.exe'
 const A1 = '0x1400013c0'   // plate EARLY
 const A2 = '0x1400013c4'   // plate LATE

@@ -1,8 +1,9 @@
 // probe3d.mjs — 枚举型选项怎么读怎么写（SubOptions/Options 的 enum 方法）。
 import { join } from 'node:path'
+import { installedDir } from './lib/dev-env.mjs'
 import { pathToFileURL } from 'node:url'
 
-const INSTALLED = process.argv[2] || 'C:/Users/Administrator/.dsh/profiles/web/node_modules/dsh-ghidra'
+const INSTALLED = process.argv[2] || installedDir('web')
 const binary = process.argv[3] || 'C:\\Windows\\System32\\winver.exe'
 
 const tools = new Map()

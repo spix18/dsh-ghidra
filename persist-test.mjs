@@ -1,10 +1,11 @@
 // persist-test.mjs — 用**唯一 token** 判定落盘，避免与项目里已有的旧值混淆。
 //   open#1 → 写 plate=TOKEN → ghidra_save(flush) → 读 → close → open#2 → 读
 import { spawnSync } from 'node:child_process'
+import { installedDir } from './lib/dev-env.mjs'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 
-const INSTALLED = 'C:/Users/Administrator/.dsh/profiles/web/node_modules/dsh-ghidra'
+const INSTALLED = installedDir('web')
 const BIN = 'C:\\Windows\\System32\\winver.exe'
 const TOKEN = 'PERSIST-' + Date.now()
 

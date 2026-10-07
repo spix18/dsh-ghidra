@@ -1,9 +1,10 @@
 // probe2.mjs — 查 Program 的 change-set / transaction 相关 API。
 // 目的：判断「写进程序了、save 也报成功、但磁盘没变」是不是因为 getChanges() 为空（没有待保存改动）。
 import { join } from 'node:path'
+import { installedDir } from './lib/dev-env.mjs'
 import { pathToFileURL } from 'node:url'
 
-const INSTALLED = 'C:/Users/Administrator/.dsh/profiles/web/node_modules/dsh-ghidra'
+const INSTALLED = installedDir('web')
 const binary = process.argv[2] || 'C:\\Windows\\System32\\winver.exe'
 
 const tools = new Map()

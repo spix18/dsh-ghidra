@@ -3,10 +3,11 @@
 //   - 死亡时间恒定但很短 → 有东西在杀它/它提前退出（保存被截断）
 //   - 落盘失败 → 大改动集本身保存不了
 import { spawnSync } from 'node:child_process'
+import { installedDir } from './lib/dev-env.mjs'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 
-const INSTALLED = 'C:/Users/Administrator/.dsh/profiles/web/node_modules/dsh-ghidra'
+const INSTALLED = installedDir('web')
 const BIN = 'C:\\Windows\\System32\\winver.exe'
 const t0 = Date.now()
 const ts = () => '[' + String(Date.now() - t0).padStart(6) + 'ms] '

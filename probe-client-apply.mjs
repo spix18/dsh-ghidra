@@ -4,9 +4,10 @@
 //   1) 模块加载不抛；2) apply 不抛；3) configForms.get('ghidra-bridge') 被调用（transport 已绑定）；
 //   4) settings.section 注册成功（id/order/label 正确）；5) subscribe/effect 被登记（可响应更新）。
 import { pathToFileURL } from 'node:url'
+import { installedDir } from './lib/dev-env.mjs'
 import { readFileSync } from 'node:fs'
 
-const dir = (process.argv[2] || 'C:/Users/Administrator/.dsh/profiles/web/node_modules/dsh-ghidra').replace(/[\\/]+$/, '')
+const dir = (process.argv[2] || installedDir('web')).replace(/[\\/]+$/, '')
 const results = []
 const check = (name, ok, detail) => { results.push({ name, ok }); console.log((ok ? 'PASS' : 'FAIL') + '  ' + name + (detail ? '  :: ' + detail : '')) }
 

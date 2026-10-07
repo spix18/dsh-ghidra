@@ -10,6 +10,7 @@
 // compare_functions、data_flow（变量定义/使用链），
 // 最后用 ghidra_save 的 flush 路径验证「inline 写的注释真的落盘」。
 import { spawnSync } from 'node:child_process'
+import { installedDir } from './lib/dev-env.mjs'
 import { writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -17,7 +18,7 @@ import { pathToFileURL } from 'node:url'
 
 const INSTALLED = process.argv[2] && process.argv[2].includes('node_modules')
   ? process.argv[2]
-  : 'C:/Users/Administrator/.dsh/profiles/web/node_modules/dsh-ghidra'
+  : installedDir('web')
 const workdir = process.argv[3] || process.argv[2] || process.cwd()
 process.chdir(workdir)
 console.log('cwd =', process.cwd())

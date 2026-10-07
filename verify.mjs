@@ -1,12 +1,18 @@
 // verify.mjs — 端到端验收 dsh-ghidra（直接驱动已安装副本的 lib，与 DSH 运行时同一份代码）
 // 用法: node verify.mjs [被测二进制路径]
-import { jsonRequest } from 'file:///C:/Users/Administrator/.dsh/profiles/web/node_modules/dsh-ghidra/lib/socket.js'
-import {
-  detectGhidraHome, readVersion, pyghidraInstalled, importBinary, startServer,
-} from 'file:///C:/Users/Administrator/.dsh/profiles/web/node_modules/dsh-ghidra/lib/ghidra.js'
-import { killPid } from 'file:///C:/Users/Administrator/.dsh/profiles/web/node_modules/dsh-ghidra/lib/run.js'
+import { join } from 'node:path'
+import { fileUrl, installedDir } from './lib/dev-env.mjs'
 
-const BIN = process.argv[2] || 'C:\\Windows\\System32\\winver.exe'
+// 静态 import 不能接运行期表达式，而副本位置随机器而变 —— 所以这里必须用 await import。
+const LIB = (name) => fileUrl(join(installedDir('web'), 'lib', name))
+const { jsonRequest } = await import(LIB('socket.js'))
+const {
+  detectGhidraHome, readVersion, pyghidraInstalled, importBinary, startServer,
+} = await import(LIB('ghidra.js'))
+const { killPid } = await import(LIB('run.js'))
+
+// 缺省样本二进制：原来写死 Windows 的 winver.exe，在 Linux/macOS 上必 ENOENT。
+const BIN = process.argv[2] || (process.platform === 'win32' ? 'C:\\Windows\\System32\\winver.exe' : '/bin/ls')
 const config = {
   ghidraHome: '', ghidraProjectDir: '', projectName: 'dsh', pythonVer: '3.13',
   analysisTimeoutSec: 600, serverStartupTimeoutMs: 180000, maxOutputChars: 100000, stream: true,

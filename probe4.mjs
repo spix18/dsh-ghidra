@@ -1,9 +1,10 @@
 // probe4.mjs — 批次 3 后半（复合函数分析 / 指令搜索 / 哈希与比较 / 数据流）的 API 反射。
 // 注意 probe 的 match 是**子串**匹配，不是正则；一轮约 40 秒。
 import { join } from 'node:path'
+import { installedDir } from './lib/dev-env.mjs'
 import { pathToFileURL } from 'node:url'
 
-const INSTALLED = process.argv[2] || 'C:/Users/Administrator/.dsh/profiles/web/node_modules/dsh-ghidra'
+const INSTALLED = process.argv[2] || installedDir('web')
 const binary = process.argv[3] || 'C:\\Windows\\System32\\winver.exe'
 
 const tools = new Map()

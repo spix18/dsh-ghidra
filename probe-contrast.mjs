@@ -7,9 +7,10 @@
 //
 // 用法：node probe-contrast.mjs [dshRoot] [pluginDir]
 import { readFileSync, existsSync } from 'node:fs'
+import { installedDir, resolveDsh } from './lib/dev-env.mjs'
 
-const DSH_ROOT = (process.argv[2] || 'C:/Users/Administrator/AppData/Roaming/npm/node_modules/@deepseek-ai/dsh').replace(/[\\/]+$/, '')
-const PLUGIN = (process.argv[3] || 'C:/Users/Administrator/.dsh/profiles/web/node_modules/dsh-ghidra').replace(/[\\/]+$/, '')
+const DSH_ROOT = (process.argv[2] || resolveDsh()).replace(/[\\/]+$/, '')
+const PLUGIN = (process.argv[3] || installedDir('web')).replace(/[\\/]+$/, '')
 const THEME = DSH_ROOT + '/node_modules/@deepseek-ai/dsh-client-ui-theme/lib/client.js'
 
 const results = []

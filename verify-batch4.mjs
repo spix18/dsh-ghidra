@@ -12,12 +12,13 @@
 //   reg.exe       —— 注册表键：唯一含 "HKEY_LOCAL_MACHINE\SOFTWARE" 的小样本
 // 首次分析这几个目标要花几分钟，之后项目里就缓存了。
 import { spawnSync } from 'node:child_process'
+import { installedDir } from './lib/dev-env.mjs'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 
 const INSTALLED = process.argv[2] && process.argv[2].includes('node_modules')
   ? process.argv[2]
-  : 'C:/Users/Administrator/.dsh/profiles/web/node_modules/dsh-ghidra'
+  : installedDir('web')
 const workdir = process.argv[3] || process.argv[2] || process.cwd()
 process.chdir(workdir)
 console.log('cwd =', process.cwd())

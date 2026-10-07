@@ -1,9 +1,10 @@
 // tx-probe.mjs — 找出哪个 **读** op 会在程序上留下悬空事务（悬空 = 后续写 op 变成嵌套子事务，
 // headless 收尾提交外层时子树被丢弃 → "Save succeeded" 但改动全丢）。
 import { join } from 'node:path'
+import { installedDir } from './lib/dev-env.mjs'
 import { pathToFileURL } from 'node:url'
 
-const INSTALLED = 'C:/Users/Administrator/.dsh/profiles/web/node_modules/dsh-ghidra'
+const INSTALLED = installedDir('web')
 const BIN = 'C:\\Windows\\System32\\winver.exe'
 const t0 = Date.now()
 const ts = () => '[' + String(Date.now() - t0).padStart(6) + 'ms] '

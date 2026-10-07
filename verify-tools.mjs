@@ -6,11 +6,12 @@
 //
 // 直接调工具，不经过 LLM，所以不会被 provider 限流影响。
 import { spawnSync } from 'node:child_process'
+import { installedDir } from './lib/dev-env.mjs'
 import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
-const INSTALLED = 'C:/Users/Administrator/.dsh/profiles/web/node_modules/dsh-ghidra'
+const INSTALLED = installedDir('web')
 // 允许用第一个参数指定工作目录，验证「换工作区仍可用」
 const workdir = process.argv[2] || process.cwd()
 process.chdir(workdir)

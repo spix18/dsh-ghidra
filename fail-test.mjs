@@ -4,10 +4,11 @@
 // 之后的写都挂在这个悬空事务下 → headless 收尾提交时全部丢弃（但仍报 Save succeeded）。
 // 每个候选隔离验证：open → 探事务 → 跑失败 op → 再探事务（是否变对象）→ 写 plate → flush → 读回。
 import { spawnSync } from 'node:child_process'
+import { installedDir } from './lib/dev-env.mjs'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 
-const INSTALLED = 'C:/Users/Administrator/.dsh/profiles/web/node_modules/dsh-ghidra'
+const INSTALLED = installedDir('web')
 const BIN = 'C:\\Windows\\System32\\winver.exe'
 
 const tools = new Map()

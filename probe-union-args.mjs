@@ -3,12 +3,13 @@
 // 层 2：validateArgs 用 string 与 array 两种形状各调一次（等价调用时校验）。
 // 层 3：编译出的 raw JSON Schema 应含 oneOf（模型侧会看到两种形状）。
 import { pathToFileURL } from 'node:url'
+import { dshToolsEntry, fileUrl, installedDir } from './lib/dev-env.mjs'
 
-const DSH_TOOLS = 'file:///C:/Users/Administrator/AppData/Roaming/npm/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-tools/lib/index.js'
+const DSH_TOOLS = fileUrl(dshToolsEntry())
 const { validateJsonSchemaValue } = await import(DSH_TOOLS)
 
 const dir = process.argv[2]
-  || 'C:/Users/Administrator/.dsh/profiles/web/node_modules/dsh-ghidra'
+  || installedDir('web')
 const mod = await import(pathToFileURL(dir.endsWith('/index.js') ? dir : dir + '/index.js').href)
 
 const registered = []

@@ -5,12 +5,15 @@
 //       缺省 = web profile 的副本；传 headless 副本可证明两个 profile 一致。
 //
 // 2026-10-04 起工具注册是**门控**的（只广告当前真能调用的工具，对照 REA 的 tool availability 契约）：
-// 桥 / REST 服务器都没跑时，apply 只会注册 5 个常驻工具，其余 213 个进 pending。
-// 所以这里不再断言「注册了 218 个」，改成断言【定义总数 218 + 当前广告数 + 被隐藏的组与原因】。
+// 桥 / REST 服务器都没跑时，apply 只会注册 6 个常驻工具，其余 213 个进 pending。
+// 所以这里不再断言「注册了 219 个」，改成断言【定义总数 219 + 当前广告数 + 被隐藏的组与原因】。
+import { join } from 'node:path'
+import { fileUrl, installedDir, sourceDir } from './lib/dev-env.mjs'
+
 const arg = process.argv[2]
 const PLUGIN = arg
   ? 'file:///' + arg.replace(/\\/g, '/').replace(/\/index\.js$/, '') + '/index.js'
-  : 'file:///C:/Users/Administrator/.dsh/profiles/web/node_modules/dsh-ghidra/index.js'
+  : fileUrl(join(installedDir('web'), 'index.js'))
 
 const mod = await import(PLUGIN)
 
@@ -94,9 +97,11 @@ try { mod.apply(ctx, config) } catch (e) { check('apply 未抛异常', false, St
 await new Promise((r) => setTimeout(r, 1500))
 
 const names = [...registered.keys()]
-// 常驻工具 = 不需要任何服务器就能跑的入口（含 3 个 lifecycle）：它们是 agent 发现可用性并补救的唯一手段
-const ALWAYS_ON = ['ghidra_status', 'ghidra_open', 'ghidra_mcp_start', 'ghidra_mcp_stop', 'ghidra_mcp_status']
-const baseExpected = ['ghidra_status', 'ghidra_open', 'ghidra_info', 'ghidra_decompile',
+// 常驻工具 = 不需要任何服务器就能跑的入口（含 3 个 lifecycle）：它们是 agent 发现可用性并补救的唯一手段。
+// ghidra_doctor 必须在这儿 —— 它存在就是为了诊断「跑不起来」，若它本身要桥在跑才可见，
+// 那么最需要它的那一种状态下反而调不到它。
+const ALWAYS_ON = ['ghidra_status', 'ghidra_open', 'ghidra_doctor', 'ghidra_mcp_start', 'ghidra_mcp_stop', 'ghidra_mcp_status']
+const baseExpected = ['ghidra_status', 'ghidra_open', 'ghidra_doctor', 'ghidra_info', 'ghidra_decompile',
   'ghidra_functions', 'ghidra_strings', 'ghidra_xrefs', 'ghidra_close',
   // 批次 1 读侧补齐
   'ghidra_segments', 'ghidra_imports', 'ghidra_exports', 'ghidra_search_strings',
@@ -120,12 +125,12 @@ const baseExpected = ['ghidra_status', 'ghidra_open', 'ghidra_info', 'ghidra_dec
   'ghidra_mcp_start', 'ghidra_mcp_stop', 'ghidra_mcp_status']
 // 上游 REST 桥 168 个生成工具 —— 期望清单来自 vendored 生成器输出（source of truth），
 // 用于核对【已装副本】用的是生成器产出的那一套（副本与源不同步时会 FAIL）。
-const { MCP_TOOLS } = await import('file:///C:/Users/Administrator/.dsh/plugins/ghidra-bridge/lib/mcp-tools.js')
+const { MCP_TOOLS } = await import(fileUrl(join(sourceDir(), 'lib', 'mcp-tools.js')))
 const expected = [...baseExpected, ...MCP_TOOLS.map((t) => t.name)]
 const bridgeGated = baseExpected.filter((n) => !ALWAYS_ON.includes(n))
 
-check('定义总数 218 = 常驻 ' + ALWAYS_ON.length + ' + 桥门 ' + bridgeGated.length + ' + REST 门 ' + MCP_TOOLS.length,
-  expected.length === 218 && baseExpected.length === 50 && bridgeGated.length === 45 && MCP_TOOLS.length === 168,
+check('定义总数 219 = 常驻 ' + ALWAYS_ON.length + ' + 桥门 ' + bridgeGated.length + ' + REST 门 ' + MCP_TOOLS.length,
+  expected.length === 219 && baseExpected.length === 51 && bridgeGated.length === 45 && MCP_TOOLS.length === 168,
   'expected=' + expected.length + ' base=' + baseExpected.length + ' bridgeGated=' + bridgeGated.length + ' mcp=' + MCP_TOOLS.length)
 check('桥/REST 都没跑时只注册 ' + ALWAYS_ON.length + ' 个常驻工具',
   names.length === ALWAYS_ON.length && ALWAYS_ON.every((n) => names.includes(n)),
@@ -139,15 +144,15 @@ check('ctx.effect 注册了 dispose 函数', effects.length === 1 && effects[0] 
 const status = await callRoute('/api/dsh-ghidra/status')
 const ta = status && status.toolAvailability
 check('状态路由上报 toolAvailability', !!ta, JSON.stringify(ta))
-check('toolAvailability.total=218 advertised=' + ALWAYS_ON.length,
-  !!ta && ta.total === 218 && ta.advertised === ALWAYS_ON.length, ta ? JSON.stringify({ total: ta.total, advertised: ta.advertised }) : '-')
+check('toolAvailability.total=219 advertised=' + ALWAYS_ON.length,
+  !!ta && ta.total === 219 && ta.advertised === ALWAYS_ON.length, ta ? JSON.stringify({ total: ta.total, advertised: ta.advertised }) : '-')
 check('toolAvailability.hidden = 桥 45 + REST 168，各带 reason 与 remediation',
   !!ta && ta.hidden.length === 2
     && ta.hidden.some((h) => h.group === 'bridge' && h.count === 45 && h.reason === 'not_running' && !!h.remediation)
     && ta.hidden.some((h) => h.group === 'mcp' && h.count === 168 && h.reason === 'not_running' && !!h.remediation),
   ta ? JSON.stringify(ta.hidden) : '-')
-check('广告集 + 隐藏集 = 218（没有工具在门控里丢失）',
-  !!ta && ta.advertised + ta.hidden.reduce((s, h) => s + h.count, 0) === 218,
+check('广告集 + 隐藏集 = 219（没有工具在门控里丢失）',
+  !!ta && ta.advertised + ta.hidden.reduce((s, h) => s + h.count, 0) === 219,
   ta ? String(ta.advertised + ta.hidden.reduce((s, h) => s + h.count, 0)) : '-')
 
 // 随包技能：skills/dsh-ghidra/SKILL.md 必须在 apply 时注册进运行时技能注册表
