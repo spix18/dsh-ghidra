@@ -574,10 +574,12 @@ window.__ModuleLoader__.load({
         const docRows = doctor.result.checks.map((c, i) => {
           const label = c.ok ? 'OK' : (c.optional ? 'IDLE' : 'FAIL')
           const style = c.ok ? S.ok : (c.optional ? S.idle : S.err)
-          return h('div', { style: S.row, key: 'doc-' + i, role: 'listitem' },
+          // 失败项把 remediation 一并显示出来：自检的价值在于「怎么修」，只挂在 tooltip 里等于没有。
+          const detail = c.detail + (!c.ok && c.hint ? ' — ' + c.hint : '')
+          return h('div', { style: S.row, key: 'doc-' + i, role: 'listitem', title: c.hint || '' },
             h('span', { style: { ...style, minWidth: 38, flexShrink: 0, fontWeight: 600 } }, label),
             h('span', { style: S.key }, c.name),
-            h('span', { style: c.optional && !c.ok ? S.hint : S.val }, c.detail),
+            h('span', { style: c.optional && !c.ok ? S.hint : S.val }, detail),
           )
         })
         children.push(h('div', {

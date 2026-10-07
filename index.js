@@ -2,6 +2,7 @@
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import Schema from '@deepseek-ai/schemastery'
 import { basename, join, isAbsolute, dirname } from 'node:path'
+import { homedir } from 'node:os'
 import { existsSync, statSync, cpSync, rmSync, mkdirSync, readdirSync, createWriteStream } from 'node:fs'
 import { jsonRequest } from './lib/socket.js'
 import { detectGhidraHome, readVersion, pyghidraInstalled, importBinary, startServer, projectPaths, hasHeadless, pythonCommand } from './lib/ghidra.js'
@@ -12,8 +13,9 @@ import { spawnSync, execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { Readable, Transform } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
-import { dataPaths, ensureDataPaths, pluginDataRoot } from './lib/paths.js'
+import { dataPaths, ensureDataPaths, pluginDataRoot, defaultProjectDir } from './lib/paths.js'
 import { loadSkillDefinition, SKILL_FILE } from './lib/skill.js'
+import { runDoctor } from './lib/doctor.js'
 const execFileP = promisify(execFile)
 
 export const name = 'ghidra-bridge'
@@ -70,6 +72,23 @@ function render(_args, value) {
   return [{ type: 'text', text: parts.join('\n\n') }]
 }
 
+// ghidra_doctor 的渲染：把自检项铺成可读清单，失败项直接带出该平台的修复命令。
+// 通用 render 会把整份报告 JSON.stringify 掉，读起来像日志而不像诊断结论。
+function renderDoctor(_args, value) {
+  const r = value && value.result
+  if (!r || !r.checks) return [{ type: 'text', text: 'ok=' + (value && value.ok) + (value && value.error ? '\n错误: ' + value.error : '') }]
+  const lines = [
+    '平台: ' + r.platform + ' · 必要项 ' + r.essentialOk + '/' + r.essentialTotal
+      + (r.runtimeIdle ? ' · ' + r.runtimeIdle + ' 个运行态项空闲（按需启动，不算失败）' : ''),
+    r.ok ? '结论: 环境就绪，必要项全部通过' : '结论: ' + (r.essentialTotal - r.essentialOk) + ' 个必要项未通过，见下面的修复行',
+  ]
+  for (const c of r.checks) {
+    lines.push((c.ok ? 'OK  ' : (c.optional ? 'IDLE' : 'FAIL')) + '  ' + c.name + ': ' + c.detail)
+    if (!c.ok && c.hint) lines.push('        修复: ' + c.hint)
+  }
+  return [{ type: 'text', text: lines.join('\n') }]
+}
+
 // ---- 上游 GhidraMCP REST 桥（ghidra_mcp_* 工具族的输出 schema 与渲染） ----
 const MCP_OUT = {
   type: 'object',
@@ -116,9 +135,10 @@ let activeDisposers = null // 上一轮注册的工具/路由 disposer（re-entr
 let currentGate = null     // 最近一次 apply 建的工具可用性门（见 apply 里的「可用性门控」）
 const toolCounts = { native: 0, lifecycle: 0, generated: 0 }
 // 不需要任何服务器就能跑的原生工具（其余 45 个原生工具都要 PyGhidra 桥在跑）。
-// 这几个必须常驻：它们是 agent 用来【发现】当前可用性并把它拉起来的入口，
-// 藏起来就等于把唯一的补救手段藏起来。
-const ALWAYS_AVAILABLE = new Set(['ghidra_status', 'ghidra_open'])
+// 这几个必须常驻：它们是 agent 用来【发现】当前可用性、诊断环境、并把它拉起来的入口，
+// 藏起来就等于把唯一的补救手段藏起来 —— ghidra_doctor 尤其不能在「环境没配好」时消失，
+// 那正是它唯一有用的时刻。
+const ALWAYS_AVAILABLE = new Set(['ghidra_status', 'ghidra_open', 'ghidra_doctor'])
 // 三个 lifecycle 工具（其余 ghidra_mcp_* 都是生成的 REST 包装）
 const LIFECYCLE_TOOL_NAMES = new Set(['ghidra_mcp_start', 'ghidra_mcp_stop', 'ghidra_mcp_status'])
 // 后台任务状态（Ghidra 下载安装 / home 迁移）—— 跨 re-entry 共享，状态路由上报进度
@@ -1249,9 +1269,31 @@ export function apply(ctx, config) {
         : join(gh.home, 'support', 'ghidraMCPHeadless'))
     : null
 
+  // 自检工具注册在 mcpBat 之后：它读取同一个绑定，且必须在任何服务器起来之前就能调用。
+  pushReg(defineTool({
+    name: 'ghidra_doctor',
+    description: '跨平台环境自检（只读，不启动任何东西）：逐项报出本机到底被解析成了什么——Ghidra home 与它是怎么找到的、headless launcher 的实际文件名（analyzeHeadless 还是 analyzeHeadless.bat）、版本、Python 解释器以及它能否 import pyghidra、Ghidra 的 per-user settings 目录与扩展目录（Linux 上扩展装错目录会静默失效）、Java 运行时、项目目录可写性、桥与 GhidraMCP 服务器的运行态；每个未通过项都附上该平台的具体修复命令。遇到「Ghidra not installed」「pyghidra 未安装」或任何跨平台怪问题时先跑这个，不要靠猜。',
+    parameters: {},
+    output: { schema: OUT, render: renderDoctor },
+    async execute() {
+      return {
+        ok: true,
+        result: await runDoctor({
+          config,
+          gh,
+          state,
+          mcpBat,
+          mcpHealth,
+          dataRoot: pluginDataRoot(),
+          projectDir: config.ghidraProjectDir || defaultProjectDir(),
+        }),
+      }
+    },
+  }))
+
   pushReg(defineTool({
     name: 'ghidra_mcp_start',
-    description: '启动上游 GhidraMCP 服务器（bethington/ghidra-mcp，226 个 REST 端点）。默认 unified 模式：在 PyGhidra 桥的同一个 JVM 内启动 REST 服务器并把它绑定到桥当前打开的程序——于是 47 个原生工具与 168 个 ghidra_mcp_* 工具作用于同一个程序、同一个进程（先 ghidra_open，再 ghidra_mcp_start）。mcpMode=standalone 时回退为独立启动 ghidraMCPHeadless.bat（第二个 Ghidra 进程，可用 file 参数在启动时导入并分析一个二进制）。',
+    description: '启动上游 GhidraMCP 服务器（bethington/ghidra-mcp，226 个 REST 端点）。默认 unified 模式：在 PyGhidra 桥的同一个 JVM 内启动 REST 服务器并把它绑定到桥当前打开的程序——于是 47 个作用于程序的工具与 168 个 ghidra_mcp_* 工具作用于同一个程序、同一个进程（先 ghidra_open，再 ghidra_mcp_start）。mcpMode=standalone 时回退为独立启动 ghidraMCPHeadless.bat（第二个 Ghidra 进程，可用 file 参数在启动时导入并分析一个二进制）。',
     parameters: {
       file: { type: 'string', description: 'standalone 模式：启动时自动加载的二进制绝对路径（可选；unified 模式下忽略，程序来自 ghidra_open）' },
       project: { type: 'string', description: 'Ghidra 项目路径（可选；缺省用服务器默认位置）' },
@@ -1487,38 +1529,17 @@ export function apply(ctx, config) {
         if (!loopback(req)) { writeJson(res, 403, { error: 'forbidden: loopback-only' }); return }
         if (req.method !== 'GET') { writeJson(res, 405, { error: 'method not allowed: ' + (req.method ?? '') }); return }
         const cfg = currentConfig || {}
-        const checks = []
-        // optional=true 的运行态/信息检查：服务器按需启动，未运行只作提示（IDLE），不算 FAIL
-        const add = (name, ok, detail, optional) => checks.push({ name, ok: !!ok, detail: detail || '', optional: !!optional })
-        const home = gh ? gh.home : null
-        add('Ghidra home', !!home && existsSync(home), home ? String(home) + (gh && gh.source ? '  [' + gh.source + ']' : '') : 'not detected — set ghidraHome in config or use Download Ghidra')
-        add('Plugin data root', existsSync(pluginDataRoot()), pluginDataRoot(), true)
-        const launcher = home ? join(home, 'Ghidra', 'Features', 'PyGhidra', 'support', 'pyghidra_launcher.py') : null
-        add('PyGhidra launcher', !!launcher && existsSync(launcher), launcher || 'missing')
-        add('GhidraMCP headless launcher', !!mcpBat && existsSync(mcpBat), mcpBat || 'missing (unified mode does not need it)')
-        let pyOk = false, pyDetail = ''
-        try {
-          const pc = pythonCommand(cfg.pythonVer || '3.13')
-          const r = spawnSync(pc.cmd, [...pc.args, '--version'], { timeout: 15000, encoding: 'utf8' })
-          pyOk = r.status === 0
-          pyDetail = pc.cmd + ' — ' + (pyOk ? String(r.stdout || '').trim() : String(r.stderr || r.stdout || 'not runnable').trim())
-        } catch (e) { pyDetail = String(e?.message || e) }
-        add('Python ' + (cfg.pythonVer || '3.13'), pyOk, pyDetail)
-        add('PyGhidra bridge', !!state.port, state.port ? 'running on port ' + state.port : 'idle (starts on first tool call)', true)
-        const mcpPort = cfg.mcpPort || MCP_DEFAULT_PORT
-        const h = await mcpHealth(mcpPort, 2500).catch((e) => ({ ok: false, error: String(e?.message || e) }))
-        add('GhidraMCP server', h.ok, h.ok ? 'healthy on port ' + mcpPort : 'idle — nothing listening on port ' + mcpPort, true)
-        let ver = null
-        try { ver = home ? readVersion(home).version : null } catch {}
-        add('Ghidra version', !!ver, ver ? String(ver) : 'unknown', true)
-        const essential = checks.filter((c) => !c.optional)
-        writeJson(res, 200, {
-          ok: essential.every((c) => c.ok),
-          essentialOk: essential.filter((c) => c.ok).length,
-          essentialTotal: essential.length,
-          runtimeIdle: checks.filter((c) => c.optional && !c.ok).length,
-          checks,
-        })
+        // 面板与 ghidra_doctor 工具共用同一个采集器（lib/doctor.js）：两处各维护一份检查列表，
+        // 迟早会出现「面板说 OK、工具说 FAIL」——那是自检工具最不该有的失败形态。
+        writeJson(res, 200, await runDoctor({
+          config: cfg,
+          gh,
+          state,
+          mcpBat,
+          mcpHealth,
+          dataRoot: pluginDataRoot(),
+          projectDir: cfg.ghidraProjectDir || defaultProjectDir(),
+        }))
       },
     })
     // ---- Ghidra 下载安装（后台；进度在 /status 的 install 字段）----
@@ -1601,11 +1622,19 @@ export function apply(ctx, config) {
         let body = {}
         try { body = JSON.parse((await readBody(req)) || '{}') } catch {}
         const want = String(body.path || '')
-        // 未给路径（或路径无效）→ 回驱动器列表，作为浏览器起点
+        // 未给路径（或路径无效）→ 回起点列表，作为文件夹浏览器的起点。
+        // Windows 上是盘符；Linux/macOS 没有盘符，沿用同一段循环只会得到**空列表** ——
+        // 面板里的目录选择器在非 Windows 上就没有起点。所以按平台给根。
         const drives = []
-        for (const L of 'ABCDEFGHIJKLMNOPQRSTUVWXYZ') {
-          const d = L + ':\\'
-          try { if (existsSync(d)) drives.push(d) } catch { /* 跳过 */ }
+        if (process.platform === 'win32') {
+          for (const L of 'ABCDEFGHIJKLMNOPQRSTUVWXYZ') {
+            const d = L + ':\\'
+            try { if (existsSync(d)) drives.push(d) } catch { /* 跳过 */ }
+          }
+        } else {
+          for (const r of ['/', homedir(), '/Volumes']) {
+            try { if (existsSync(r) && !drives.includes(r)) drives.push(r) } catch { /* 跳过 */ }
+          }
         }
         if (!want) { writeJson(res, 200, { ok: true, path: '', parent: null, drives, dirs: [] }); return }
         if (!isAbsolute(want)) { writeJson(res, 400, { ok: false, error: 'path must be absolute', drives }); return }
