@@ -4,7 +4,7 @@ import Schema from '@deepseek-ai/schemastery'
 import { basename, join, isAbsolute, dirname } from 'node:path'
 import { existsSync, statSync, cpSync, rmSync, mkdirSync, readdirSync, createWriteStream } from 'node:fs'
 import { jsonRequest } from './lib/socket.js'
-import { detectGhidraHome, readVersion, pyghidraInstalled, importBinary, startServer, projectPaths } from './lib/ghidra.js'
+import { detectGhidraHome, readVersion, pyghidraInstalled, importBinary, startServer, projectPaths, hasHeadless, pythonCommand } from './lib/ghidra.js'
 import { killPid, pidAlive, sleep } from './lib/run.js'
 import { mcpStart, mcpCall, mcpStop, mcpHealth, LOG_FILE as MCP_LOG_FILE, MCP_DEFAULT_PORT } from './lib/mcp.js'
 import { MCP_TOOLS } from './lib/mcp-tools.js'
@@ -82,6 +82,11 @@ const MCP_OUT = {
     port: { type: 'integer' },
     pid: { type: 'integer' },
     adopted: { type: 'boolean' },
+    // [linux-port-fix] ghidra_mcp_start/ghidra_mcp_status both return `mode`, but the schema
+    // omitted it while additionalProperties:false — so the framework rejected the tool's own
+    // output and every mcp_start/mcp_stop/mcp_status call failed with
+    // 'value.mode is not a declared property' even though the server had actually started.
+    mode: { type: 'string' },
     graceful: { type: 'boolean' },
     ms: { type: 'integer' },
     log: { type: 'string' },
@@ -162,8 +167,8 @@ async function runInstall(targetRoot, force) {
       .sort((a, b) => b.mtime - a.mtime)
     const newHome = dirs[0]?.p || null
     if (!newHome) throw new Error('extraction produced no ghidra_* directory in ' + targetRoot)
-    if (!existsSync(join(newHome, 'support', 'ghidraMCPHeadless.bat'))) {
-      throw new Error('extracted home missing support/ghidraMCPHeadless.bat — ' + newHome)
+    if (!hasHeadless(newHome)) {
+      throw new Error('extracted home missing support/analyzeHeadless(.bat) — ' + newHome)
     }
     try { rmSync(zipPath, { force: true }) } catch {}
     installState.running = false
@@ -392,11 +397,12 @@ export function apply(ctx, config) {
 
   // 打开流程：导入（如需）→ 启动服务器 → info
   async function openFlow(binaryPath, onProgress) {
-    if (!gh) throw new Error('未找到 Ghidra 安装（需含 support/analyzeHeadless.bat）；可用配置 ghidraHome 指定')
+    if (!gh) throw new Error('未找到 Ghidra 安装（需含 support/analyzeHeadless 或 analyzeHeadless.bat）；可用配置 ghidraHome 指定')
     const v = readVersion(gh.home)
     onProgress('Ghidra ' + v.version + ' @ ' + gh.home + '\n')
     if (!pyghidraInstalled(config.pythonVer)) {
-      throw new Error('Python ' + config.pythonVer + ' 未安装 pyghidra；请执行: py -' + config.pythonVer + ' -m pip install pyghidra')
+      const pc = pythonCommand(config.pythonVer)
+      throw new Error('解释器 ' + pc.cmd + ' 未安装 pyghidra；请执行: ' + pc.cmd + ' -m pip install pyghidra')
     }
     await stopServer(30000)
     const program = await importBinary(gh, binaryPath, config, onProgress)
@@ -1234,7 +1240,14 @@ export function apply(ctx, config) {
   //  · unified（缺省）：REST 服务器跑在 PyGhidra 桥的**同一个 JVM** 内（DecompileBridge.py 的 mcpServe op，
   //    经 HeadlessProgramProvider.setCurrentProgram 绑定到桥当前程序）——单进程、同一程序，两边状态不分叉。
   //  · standalone：另起 ghidraMCPHeadless.bat（第二个 Ghidra 进程，独立程序，与桥无关）。
-  const mcpBat = gh ? join(gh.home, 'support', 'ghidraMCPHeadless.bat') : null
+  // [linux-port] upstream hardcoded ghidraMCPHeadless.bat; on Linux Ghidra would generate an
+  // extensionless ghidraMCPHeadless. Accept either. In unified mode (the default) neither is
+  // used — the REST server runs inside the bridge JVM — so a miss here is not fatal.
+  const mcpBat = gh
+    ? (existsSync(join(gh.home, 'support', 'ghidraMCPHeadless.bat'))
+        ? join(gh.home, 'support', 'ghidraMCPHeadless.bat')
+        : join(gh.home, 'support', 'ghidraMCPHeadless'))
+    : null
 
   pushReg(defineTool({
     name: 'ghidra_mcp_start',
@@ -1482,12 +1495,13 @@ export function apply(ctx, config) {
         add('Plugin data root', existsSync(pluginDataRoot()), pluginDataRoot(), true)
         const launcher = home ? join(home, 'Ghidra', 'Features', 'PyGhidra', 'support', 'pyghidra_launcher.py') : null
         add('PyGhidra launcher', !!launcher && existsSync(launcher), launcher || 'missing')
-        add('GhidraMCP headless.bat', !!mcpBat && existsSync(mcpBat), mcpBat || 'missing')
+        add('GhidraMCP headless launcher', !!mcpBat && existsSync(mcpBat), mcpBat || 'missing (unified mode does not need it)')
         let pyOk = false, pyDetail = ''
         try {
-          const r = spawnSync('py', ['-' + (cfg.pythonVer || '3.13'), '--version'], { timeout: 15000, encoding: 'utf8' })
+          const pc = pythonCommand(cfg.pythonVer || '3.13')
+          const r = spawnSync(pc.cmd, [...pc.args, '--version'], { timeout: 15000, encoding: 'utf8' })
           pyOk = r.status === 0
-          pyDetail = pyOk ? String(r.stdout || '').trim() : String(r.stderr || r.stdout || 'py launcher not found').trim()
+          pyDetail = pc.cmd + ' — ' + (pyOk ? String(r.stdout || '').trim() : String(r.stderr || r.stdout || 'not runnable').trim())
         } catch (e) { pyDetail = String(e?.message || e) }
         add('Python ' + (cfg.pythonVer || '3.13'), pyOk, pyDetail)
         add('PyGhidra bridge', !!state.port, state.port ? 'running on port ' + state.port : 'idle (starts on first tool call)', true)
