@@ -1,0 +1,19 @@
+# Line endings are normalised for a cross-platform plugin: Git stores LF, and every platform's
+# checkout gets LF. Without this, a Windows checkout (core.autocrlf=true) rewrites every source
+# file to CRLF, so CRLF leaks into a Linux/macOS contributor's tree and into the published npm
+# tarball — and the vendored .py / .mjs sources then differ byte-for-byte between platforms.
+* text=auto eol=lf
+
+# Windows-only artefacts keep CRLF so cmd.exe parses them. Nothing ships one today; the rule
+# is here so a future launcher wrapper does not arrive LF-only and fail on Windows.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
+
+# Never touch binaries
+*.jar binary
+*.zip binary
+*.whl binary
+*.png binary
+*.ico binary
+*.gif binary
