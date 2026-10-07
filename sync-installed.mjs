@@ -2,7 +2,7 @@
 // 用途：改完源后必须运行，否则验收脚本（它们刻意加载**已装副本**
 // 以复现 DSH 的真实解析路径）测的还是旧代码 —— 曾因此误判「修复无效」。
 //
-// [linux-port] 根目录原本硬编码成 'C:/Users/Administrator/.dsh/profiles'。改为从 DSH_HOME
+// [linux-port] 根目录原本硬编码成 'C:/Users/<user>/.dsh/profiles'。改为从 DSH_HOME
 // 推导（回退 $HOME/.dsh），profile 列表按实际存在的目录过滤，这样同一份 fork 在
 // Windows 与 Linux 上都能直接跑。
 import { copyFileSync, mkdirSync, readFileSync, existsSync, rmSync, readdirSync } from 'node:fs'

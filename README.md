@@ -219,7 +219,7 @@ prompt 前缀缓存失效（每次 start/stop 一次），换来的是「模型�
 
 **从本地源码安装（开发用）：**
 
-    dsh plugin --profile web add "file:C:/Users/Administrator/.dsh/plugins/ghidra-bridge"
+    dsh plugin --profile web add "file:C:/Users/<user>/.dsh/plugins/ghidra-bridge"
 
 `file:` 是**拷贝式**安装：改完本目录的源码后必须同步已装副本，否则跑的还是旧代码——
 

@@ -2,9 +2,9 @@
 
 ## 来源
 - 上游仓库：https://github.com/zp2921060653/dsh-plugins （子目录 `ghidra-bridge`）
-- 本地 master（可编辑副本）：`C:\Users\Administrator\.dsh\plugins\ghidra-bridge`
+- 本地 master（可编辑副本）：`C:\Users\<user>\.dsh\plugins\ghidra-bridge`
 - 克隆快照 commit：`aae715db7af181a0d118bc47258dc4150ae901bb`（2026-09-11，"Add dsh-wxapkg plugin; fix reminder-bridge tick race crash"）
-- 安装形态：pnpm `file:` 依赖 → 实装在 `C:\Users\Administrator\.dsh\profiles\<profile>\node_modules\dsh-ghidra`（**真实目录**，非符号链接）
+- 安装形态：pnpm `file:` 依赖 → 实装在 `C:\Users\<user>\.dsh\profiles\<profile>\node_modules\dsh-ghidra`（**真实目录**，非符号链接）
 - 注册：`profiles/<profile>/package.json` 的 `dependencies.dsh-ghidra` + `dsh.profile.bundles`
 - 已装 profile：`web`（当前 GUI 用）、`headless`（用于无 GUI 的真实运行时验证）
 
@@ -24,13 +24,13 @@
 ### 2. 安装协议必须是 `file:`，不能用 `link:`
 `dsh plugin --profile web add <绝对路径>` 会写成 `link:../../plugins/ghidra-bridge`，在
 `node_modules` 里产生 **符号链接**。Node ESM 按 **realpath** 解析裸包名，于是从
-`C:\Users\Administrator\.dsh\plugins\ghidra-bridge` 向上找到 `C:\node_modules` 也找不到
+`C:\Users\<user>\.dsh\plugins\ghidra-bridge` 向上找到 `C:\node_modules` 也找不到
 `@deepseek-ai/dsh-tools`，同样报 `ERR_MODULE_NOT_FOUND`。
 改用 `file:` 协议后 pnpm 安装为真实目录，向上走到 `profiles\node_modules\@deepseek-ai\*` 正常解析。
 
 正确的安装命令：
 ```powershell
-dsh plugin --profile web add "file:C:/Users/Administrator/.dsh/plugins/ghidra-bridge"
+dsh plugin --profile web add "file:C:/Users/<user>/.dsh/plugins/ghidra-bridge"
 ```
 
 ### 3. `lib/ghidra.js` — `pyghidra_launcher.py` 提前退出被误判为「服务器启动失败」
@@ -565,14 +565,14 @@ true 时把 pending 逐个 `ctx.tools.register` 收进 live，false 时 `while (
   可用 `DSH_SKILL_PKG=<绝对路径>` 指定。
 
 ## 修改 master 之后的重新安装
-`file:` 是**拷贝式**安装，改完 `C:\Users\Administrator\.dsh\plugins\ghidra-bridge` 里的源码后，
+`file:` 是**拷贝式**安装，改完 `C:\Users\<user>\.dsh\plugins\ghidra-bridge` 里的源码后，
 必须把它同步进 `profiles/<profile>/node_modules/dsh-ghidra`，变更才会生效。
 
 **首选**：`node sync-installed.mjs` —— 把 17 个源文件（`index.js`、`client.js`、`package.json`、`cordis.patch.yml`、
 `README.md`、`icon.svg`、`locale/{en,zh}.json`、`lib/{paths,ghidra,run,socket,mcp,mcp-tools,skill}.js`、
 `skills/dsh-ghidra/SKILL.md`、`scripts/DecompileBridge.py`）拷进 web + headless 两个已装副本
 （共 34 个文件），逐文件比对 SHA256，并清掉 `scripts/__pycache__`。
-（也可重跑 `dsh plugin --profile <p> add "file:C:/Users/Administrator/.dsh/plugins/ghidra-bridge"`，
+（也可重跑 `dsh plugin --profile <p> add "file:C:/Users/<user>/.dsh/plugins/ghidra-bridge"`，
 但它只改一个 profile，且不会清字节码缓存。）
 
 ⚠️ 验收脚本刻意加载**已装副本**（复现 DSH 的真实解析路径），所以**忘了同步 = 测的还是旧代码**，
@@ -593,7 +593,7 @@ true 时把 pending 逐个 `ctx.tools.register` 收进 live，false 时 `while (
 因此验的就是 DSH 实际加载的那份代码。**跑之前先 `node sync-installed.mjs`**，否则测的是旧副本。
 
 ```powershell
-cd C:\Users\Administrator\.dsh\plugins\ghidra-bridge
+cd C:\Users\<user>\.dsh\plugins\ghidra-bridge
 node sync-installed.mjs    # 先把源码同步进 web + headless 两个已装副本（SHA256 校验）
 node verify-load.mjs       # 加载路径 + Config 默认值(11 项) + 218 个工具注册
                            # (47 原生 + 3 lifecycle + 168 桥工具) + 桥工具 params 数组回归 → 10/10
@@ -648,3 +648,24 @@ node exit-test.mjs read    # 新进程读回 → 必须 PERSISTED=true
 新增 bundle 需要 **重启 DSH** 才会挂载到运行中的 server（`dsh plugin add` 只改 profile 清单与磁盘，
 不会让已运行的进程热加载；`web` profile 也没有 `patchReload` 键）。
 重启后用 `ghidra_status` 自检，再对任意二进制跑一次 `ghidra_open`。
+
+## 0.11.1 — 移除个人名与本机路径
+
+0.11.0 发布后发现两类**本机身份信息**进了会随 npm 包一起发布的文件（`files` 白名单里包含
+`README.md`、`PATCHES.md`、`LINUX-PORT.md`、`sync-installed.mjs` 与整个 `lib/`）：
+
+- Linux 移植机上那个用户 home 目录的**绝对路径**出现在 `LINUX-PORT.md` 的 5 处：
+  Python venv、JVM 打印的 XDG 扩展目录（§3.1）、`pythonCommand()` 实测值（§4）、§6 的工作目录。
+- Windows 上带**具体账户名**的用户目录路径出现在 `PATCHES.md`(7 处)、`README.md`(1)、
+  `LINUX-PORT.md`(1)、`lib/dev-env.mjs`(1，说明旧硬编码值的注释)、`sync-installed.mjs`(1，同上)。
+
+（本条刻意不复述那两个原始字符串 —— 在「记录脱敏」的文档里把待脱敏的字面量写回去，
+等于换个位置重新泄露一次。）
+
+处理：前者统一改写为 `~`，并在 §3.1 注明 `~` 是省略写法、JVM 实际打印的是绝对路径；
+后者统一改写为 `<user>` 占位符。仓库本地的 git 身份（`user.name`/`user.email`）原先继承自
+移植机，已改为 `spix18`，并把已推送到 `main` 的 3 个提交（**内容不变，只改作者**）重写为
+`spix18`，标签 `v0.11.0` 一并指向重写后的提交。
+
+**教训**：文档里贴真实命令输出时，home 路径、用户名、主机名都要先脱敏再落盘。这类内容
+一旦跟着版本号发到 npm 就**改不掉**了 —— 只能发新版本覆盖，旧版本只能下架或弃用。

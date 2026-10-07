@@ -21,7 +21,7 @@ upstream's real history (rooted at upstream `714edeb`, v0.10.1) and extended to 
 |---|---|---|
 | Ghidra | `/opt/ghidra`, 12.1.2 **DEV** | `GHIDRA_INSTALL_DIR` |
 | JDK | `/usr/lib/jvm/java-27-openjdk` | pinned — Ghidra 12 needs Java 21+, this box defaults to 17 |
-| Python | `/home/arminwylin/pyghidra-venv`, 3.14.7 | `pyghidra` 3.1.0 installed in the venv |
+| Python | `~/pyghidra-venv`, 3.14.7 | `pyghidra` 3.1.0 installed in the venv |
 | GhidraMCP | `~/.config/ghidra/ghidra_12.1.2_DEV/Extensions/GhidraMCP` | **XDG path**, not `~/.ghidra` |
 | Project dir | `/tmp/dsh-ghidra-projects` | |
 
@@ -142,7 +142,7 @@ MCP is unreachable on any platform, so the port would be incomplete.
 - `ghidraMCPHeadless` is resolved per platform (`.bat` if present, else extensionless).
 - The status label reads *GhidraMCP headless launcher* with a note that unified
   mode does not need it.
-- `sync-installed.mjs` had `ROOT = 'C:/Users/Administrator/.dsh/profiles'` hardcoded.
+- `sync-installed.mjs` had `ROOT = 'C:/Users/<user>/.dsh/profiles'` hardcoded.
   It now derives the root from `DSH_HOME` (falling back to `$HOME/.dsh`).
 
 ---
@@ -163,10 +163,12 @@ This one cost real time. Ghidra on Linux puts user extensions under
 than guessing:
 
 ```
-extension_installation_dirs: ['/home/arminwylin/.config/ghidra/ghidra_12.1.2_DEV/Extensions',
+extension_installation_dirs: ['~/.config/ghidra/ghidra_12.1.2_DEV/Extensions',
                                '/opt/ghidra/Ghidra/Extensions']
-user_settings_dir:           '/home/arminwylin/.config/ghidra/ghidra_12.1.2_DEV'
+user_settings_dir:           '~/.config/ghidra/ghidra_12.1.2_DEV'
 ```
+
+(`~` stands in for the user's home directory — the JVM printed the absolute path.)
 
 Note the `_DEV` suffix — it comes from `application.release.name=DEV` in
 `application.properties`, not `_PUBLIC`. Installing to the wrong dir fails
@@ -195,7 +197,7 @@ not stripped).
 | Check | Result |
 |---|---|
 | `detectGhidraHome()` | `/opt/ghidra` via `external` |
-| `pythonCommand()` | `/home/arminwylin/pyghidra-venv/bin/python3` |
+| `pythonCommand()` | `~/pyghidra-venv/bin/python3` |
 | `pyghidraInstalled()` | `true` |
 | `ghidra_open` | imported, 30 functions, 86 symbols, all segments mapped |
 | `ghidra_decompile verify` | correct C body |
@@ -239,7 +241,7 @@ the generated parameter names may be one version ahead of the server.
 ## 6. Reapplying and rollback
 
 The profile copy is **not** a symlink to the fork — it is a synced copy. After any
-edit in `/home/arminwylin/dsh-ghidra-fork`, run:
+edit in `~/dsh-ghidra-fork`, run:
 
 ```sh
 node sync-installed.mjs     # copies 40 files into every profile, verifies SHA256
