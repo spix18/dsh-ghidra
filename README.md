@@ -15,7 +15,12 @@ any project.
 
 ## Install
 
-**Requirements:** Windows · Ghidra 12.x · Python 3.13 with `pyghidra` (`py -3.13 -m pip install pyghidra`) · Node ≥ 20 · DSH ≥ 0.2
+**Requirements:** Windows, Linux or macOS · Ghidra 12.x · Python 3.13 with `pyghidra` (`python3 -m pip install pyghidra`; on Windows `py -3.13 -m pip install pyghidra`) · Node ≥ 20 · DSH ≥ 0.2
+
+> Not sure whether your machine is set up? Run the **`ghidra_doctor`** tool (or the panel's *Run doctor*
+> button) — it checks every item above against your actual host and tells you what to fix. On Linux
+> and macOS it also picks the right Ghidra user directory, headless launcher and process tooling;
+> see [LINUX-PORT.md](LINUX-PORT.md) for the platform specifics.
 
 ```bash
 # 1. install the plugin into your DSH profile
@@ -51,8 +56,12 @@ After editing a local checkout, re-sync the installed copy:
 
 ## Features
 
-- **218 tools** = 47 native (PyGhidra bridge) + 3 lifecycle + 168 generated from the upstream
+- **219 tools** = 48 native (47 on the PyGhidra bridge, plus the host-level `ghidra_doctor`)
+  + 3 lifecycle + 168 generated from the upstream
   [GhidraMCP](https://github.com/bethington/ghidra-mcp) REST surface (226 endpoints).
+- **Cross-platform** — Windows, Linux and macOS; `ghidra_doctor` checks the host end to end
+  (Ghidra install, headless launcher, PyGhidra, Python, Java, user settings dir, extension,
+  ports) and says what to fix instead of letting you guess.
 - **Single JVM (default `mcpMode=unified`)** — the upstream REST server runs *inside* the PyGhidra
   bridge process and is bound to the same open program, so native and REST tools never diverge.
 - **Self-contained data root** — the Ghidra install, logs and runtime files live in
@@ -64,7 +73,7 @@ After editing a local checkout, re-sync the installed copy:
   load time, so the agent knows *when* this plugin is the right tool (and when it is not) before it
   starts calling anything.
 - **Only reachable tools are advertised** — with no bridge and no REST server running the plugin
-  exposes 5 entry points instead of 218, and reports the hidden groups, the reason and the fix.
+  exposes 6 entry points instead of 219, and reports the hidden groups, the reason and the fix.
   `ghidra_open` / `ghidra_mcp_start` bring the rest back in the same session.
 - **Verification harnesses ship with the package** (`verify-load.mjs`, `probe-availability.mjs`,
   `probe-*.mjs`) so you can check the install on your own machine.
@@ -103,11 +112,12 @@ Ghidra 12 的 headless **Java 脚本**加载有上游 bug（NSA/ghidra#9551，�
 >    **绝不能 abort** —— abort 子事务会让 Ghidra 丢弃整个外层事务（内存里读得到、日志说
 >    `Save succeeded`，磁盘却是旧值）。
 
-## 工具（47 原生 + 171 REST 桥 = 218 个）
+## 工具（48 原生 + 171 REST 桥 = 219 个）
 
 | 分组 | 工具 |
 | --- | --- |
 | 会话 / 总览 | `ghidra_status`、`ghidra_open`（导入+分析+起服务器，默认流式后台任务）、`ghidra_info`、`ghidra_save`（把改动 flush 落盘）、`ghidra_close` |
+| 环境自检（跨平台，常驻） | `ghidra_doctor`（只读、不启动任何东西：平台、Ghidra 安装与版本、headless 启动器、PyGhidra launcher 与 Python、`pyghidra` 可导入性、Java/`JAVA_HOME`、Ghidra 用户设置目录（按平台的真实位置）、GhidraMCP 扩展 jar、安装路径是否含非 ASCII、项目目录可写、端口占用；每项失败都带怎么修。跨平台怪问题先跑它，不要靠猜） |
 | 读侧 · 基础 | `ghidra_decompile`、`ghidra_functions`、`ghidra_strings`、`ghidra_xrefs`、`ghidra_disassemble`、`ghidra_variables`、`ghidra_segments`、`ghidra_read_memory` |
 | 读侧 · 进阶 | `ghidra_imports`、`ghidra_exports`、`ghidra_search_strings`（正则）、`ghidra_search_functions`（正则）、`ghidra_calls`、`ghidra_call_graph`（BFS）、`ghidra_pcode`（listing/high 两档） |
 | 写侧 | `ghidra_get_comments`、`ghidra_set_comment`、`ghidra_rename`、`ghidra_label`、`ghidra_set_prototype`、`ghidra_set_variables`、`ghidra_create_function`、`ghidra_delete_function`、`ghidra_tags` |
@@ -115,7 +125,7 @@ Ghidra 12 的 headless **Java 脚本**加载有上游 bug（NSA/ghidra#9551，�
 | 复合分析 | `ghidra_function_context`（一个函数一次给全：参数/调用关系/字符串引用/指令统计/复杂度/伪代码）、`ghidra_search_instructions`（助记符/操作数/正则）、`ghidra_hash`（函数级 bytes·code·mnemonic 三种哈希，程序级逐块 + `imageHash`）、`ghidra_compare_functions`（相似度 + 差集 + 逐条差异）、`ghidra_data_flow`（变量定义/使用链 BFS） |
 | 恶意代码分析 | `ghidra_detect_crypto_constants`（28 条常量签名：AES S-box、CRC32/CRC32C、MD5/SHA-1/256/512 的 init 与 K 表、Keccak 轮常量、Base64 双字母表、Blowfish P-array、曲线模数）、`ghidra_detect_malware_behaviors`（10 类行为 × API 名表，证据分 import/function/string）、`ghidra_extract_iocs_with_context`（17 类 IOC，可选 `includeRawMemory` 扫未定义数据）、`ghidra_find_anti_analysis_techniques`（反调试/反 VM/调试器线索 + RDTSC/CPUID/INT3 字节计数） |
 | MCP REST 桥 · 生命周期 | `ghidra_mcp_start`（拉起上游 GhidraMCP headless 服务器，可带 file 自动导入分析；已在运行时采纳）、`ghidra_mcp_stop`（先保存程序再优雅退出）、`ghidra_mcp_status`（/health 快照） |
-| MCP REST 桥 · 生成工具（168 个） | `ghidra_mcp_*`（`lib/mcp-tools.js` 由生成器从上游 live schema 产出：xref/datatype/program/malware/analysis/documentation/headless/function/symbol/comment/listing/project/emulation/getter/server 共 15 类；与原生 47 工具重复的 45 个端点不生成） |
+| MCP REST 桥 · 生成工具（168 个） | `ghidra_mcp_*`（`lib/mcp-tools.js` 由生成器从上游 live schema 产出：xref/datatype/program/malware/analysis/documentation/headless/function/symbol/comment/listing/project/emulation/getter/server 共 15 类；与原生工具重复的 45 个端点不生成） |
 | 诊断（仅 socket） | `probe`（`{tx:true}` / `{save:true}` / `{handles:true}` / `{analysis:true}` / `{class:'...'}` / `{locals:'0x...'}`，不注册为模型工具） |
 
 **`ghidra_run_script_inline` 是这一组里的万能钥匙**：它在桥接脚本的上下文里直接 `exec` 一段 Python
@@ -147,13 +157,13 @@ provider 托管的占位提示。`probe-skill-registry.mjs` 用**真实的** `@d
 ⚠️ **在「设置 → 技能」里看不到它，这是预期的**：`dsh-skill-hub` 的目录是**文件系统扫描**
 （bundled / project-* / user-* 五类根），不枚举运行时注册表。技能对 agent 有效，只是不出现在那个列表里。
 
-**只广告现在跑得起来的工具。** 218 个工具里只有 5 个不需要任何服务器
-（`ghidra_status`、`ghidra_open`、`ghidra_mcp_start/stop/status`）。桥或 REST 服务器没跑时，
+**只广告现在跑得起来的工具。** 219 个工具里只有 6 个不需要任何服务器
+（`ghidra_status`、`ghidra_open`、`ghidra_doctor`、`ghidra_mcp_start/stop/status`）。桥或 REST 服务器没跑时，
 其余 213 个**不再注册进工具表** —— 模型看不到，也就不会去调一个必然失败的工具。
 `ghidra_status` 与 `GET /api/dsh-ghidra/status` 都返回 `toolAvailability`：
 
 ```
-{ "total": 218, "advertised": 5,
+{ "total": 219, "advertised": 6,
   "hidden": [
     { "group": "bridge", "label": "PyGhidra bridge", "count": 45,
       "reason": "not_running", "remediation": "call ghidra_open on a binary" },
@@ -164,7 +174,7 @@ provider 托管的占位提示。`probe-skill-registry.mjs` 用**真实的** `@d
 
 `ghidra_open` 成功 → 桥的 45 个立刻回来；`ghidra_mcp_start` 成功 → REST 的 168 个回来；
 服务器停掉则同步撤掉（`ghidra_mcp_stop`、面板上的停止按钮、任何一次 `ghidra_status` 都会同步）。
-**没有工具会在门控里丢失**：`advertised + Σhidden = 218`，有断言守着。代价是注册表变化会让那一次
+**没有工具会在门控里丢失**：`advertised + Σhidden = 219`，有断言守着。代价是注册表变化会让那一次
 prompt 前缀缓存失效（每次 start/stop 一次），换来的是「模型看到的工具集 = 现在真能跑的工具集」。
 
 ## 环境要求（本机已配好）
@@ -276,7 +286,7 @@ prompt 前缀缓存失效（每次 start/stop 一次），换来的是「模型�
     ghidra-bridge/
     ├── package.json            # dsh.bundle manifest + dsh.client（浏览器半）
     ├── cordis.patch.yml        # 插件行插入层
-    ├── index.js                # 218 个工具的注册（47 原生 + 3 MCP lifecycle + 168 生成）+ 服务器状态/优雅停止管理 + /api/dsh-ghidra/status|mcp-stop|doctor|install-ghidra|migrate-home 路由
+    ├── index.js                # 219 个工具的注册（48 原生 + 3 MCP lifecycle + 168 生成）+ 服务器状态/优雅停止管理 + /api/dsh-ghidra/status|mcp-stop|doctor|install-ghidra|migrate-home 路由
     ├── client.js               # 浏览器半：插件管理页的 Ghidra 桥卡片（状态 + 可热改配置表单）
     ├── icon.svg                # 插件管理页图标
     ├── locale/                 # en.json / zh.json（插件列表卡片的标题/描述）
@@ -299,7 +309,7 @@ prompt 前缀缓存失效（每次 start/stop 一次），换来的是「模型�
 ## 验收
 
     node sync-installed.mjs               # 先把源码同步进两个已装副本（否则验的是旧代码）
-    node verify-load.mjs [已装副本目录]   # 加载路径 + 218 个工具定义 + 门控只广告 5 个 +
+    node verify-load.mjs [已装副本目录]   # 加载路径 + 219 个工具定义 + 门控只广告 6 个 +
                                           #   随包技能注册 + 桥工具 params 回归   → 21/21
     node probe-availability.mjs [副本]    # 工具可用性门控：冷启动 5 → 服务器上线 173 →
                                           #   下线回 5，撤门干净且幂等              → 14/14
@@ -329,7 +339,7 @@ prompt 前缀缓存失效（每次 start/stop 一次），换来的是「模型�
   `ghidra_mcp_start` 会把上游 REST 服务器启动在 PyGhidra 桥的**同一个 JVM** 内
   （`DecompileBridge.py` 的 `mcpServe` op：`com.xebyte.headless.GhidraMCPHeadlessServer.launch()` 跑在
   daemon 线程 + `HeadlessProgramProvider.setCurrentProgram()` 绑定桥当前程序），
-  于是 47 个原生工具与 168 个 REST 工具作用于**同一个程序、同一个进程**（状态不再分叉，省一份 JVM）。
+  于是 47 个作用于程序的工具与 168 个 REST 工具作用于**同一个程序、同一个进程**（状态不再分叉，省一份 JVM）。
   桥停止/REST 服务器随之消失，重新 `ghidra_open` + `ghidra_mcp_start` 即可。
   `mcpMode=standalone` 回退旧行为（独立 `ghidraMCPHeadless.bat`，第二个实例，可用 `file` 参数启动时导入）。
   前置：上游扩展 jar 在用户扩展目录

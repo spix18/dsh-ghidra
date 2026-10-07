@@ -1,7 +1,7 @@
 {
   "name": "dsh-ghidra",
-  "version": "0.10.1",
-  "description": "Ghidra bridge plugin for DeepSeek Harness (DSH): 218 reverse-engineering tools — import binaries, decompile, xrefs, search, script Ghidra, plus the full upstream GhidraMCP REST surface, served from a single Ghidra JVM. Ships an agent skill and only advertises the tools that can actually run right now.",
+  "version": "0.11.0",
+  "description": "Ghidra bridge plugin for DeepSeek Harness (DSH): 219 reverse-engineering tools — import binaries, decompile, xrefs, search, script Ghidra, plus the full upstream GhidraMCP REST surface, served from a single Ghidra JVM. Cross-platform (Windows, Linux, macOS) with a built-in environment doctor. Ships an agent skill and only advertises the tools that can actually run right now.",
   "type": "module",
   "main": "index.js",
   "icon": "./icon.svg",
@@ -17,6 +17,7 @@
     "README.md",
     "PATCHES.md",
     "NOTICE.md",
+    "LINUX-PORT.md",
     "sync-installed.mjs",
     "gen-mcp-tools.mjs",
     "UPSTREAM-SCHEMA-LIVE.json",

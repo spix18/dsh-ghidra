@@ -10,6 +10,9 @@ the repository.
 Commit: `1e0498c` — *port plugin to Linux; fix MCP output schema and process-tree cleanup*
 Files touched: `lib/ghidra.js`, `lib/run.js`, `lib/mcp.js`, `index.js`, `sync-installed.mjs`
 
+That commit lives on an orphan branch. For release `0.11.0` the port was replayed onto
+upstream's real history (rooted at upstream `714edeb`, v0.10.1) and extended to macOS — see §7.
+
 ---
 
 ## 1. The environment as it is now
@@ -239,7 +242,7 @@ The profile copy is **not** a symlink to the fork — it is a synced copy. After
 edit in `/home/arminwylin/dsh-ghidra-fork`, run:
 
 ```sh
-node sync-installed.mjs     # copies 18 files, verifies SHA256 per profile
+node sync-installed.mjs     # copies 40 files into every profile, verifies SHA256
 ```
 
 Then restart DSH. The script deliberately loads the *installed* copy in its
@@ -253,3 +256,87 @@ Original npm-installed copy is preserved at:
 
 To roll back, copy that directory over
 `~/.dsh/profiles/web/node_modules/dsh-ghidra` and restart DSH.
+
+---
+
+## 7. Beyond Linux: macOS, the settings directory, and `ghidra_doctor`
+
+### 7.1 The user directory was wrong on *both* non-Windows platforms
+
+§3.1 recorded the symptom — Ghidra loaded with the extension absent — and the fix
+applied at the time was `~/.ghidra/.ghidra_<ver>_<release>`. That is wrong twice over:
+off Windows Ghidra never uses `~/.ghidra`, and the versioned leaf carries no leading
+dot. The mistake is worth documenting because it fails *silently*: Ghidra starts
+normally with the class simply missing from the classpath.
+
+The correct base directory is the one Ghidra resolves for itself, and
+`upstream-build.gradle`'s `resolveGhidraUserDir` states it in one place:
+
+| Platform | Base | Fallback |
+|---|---|---|
+| macOS | `~/Library/ghidra` | — |
+| Windows | `%APPDATA%\ghidra` | `~/AppData/Roaming/ghidra` |
+| other | `$XDG_CONFIG_HOME/ghidra` | `~/.config/ghidra` |
+
+`ghidraUserBaseDir()` now encodes exactly that. The leaf is not invented either:
+`ghidraSettingsDir()` prefers a directory Ghidra has already created for this version,
+because the on-disk suffix is not always guessable — the running JVM on the Linux host
+reported `ghidra_12.1.2_DEV`, the `_DEV` coming straight from
+`application.release.name`. Only when nothing matches is `ghidra_<ver>_<release>`
+constructed. `ghidraUserExtensionDir()` then appends `Extensions`, which is the path
+the extension jar must reach.
+
+### 7.2 macOS
+
+`detectGhidraHome()` gained a `darwin` branch alongside the Windows and Linux ones,
+covering the three layouts that actually occur:
+
+- **Homebrew cask** — `/opt/homebrew/Caskroom/ghidra/<version>/ghidra_<ver>_PUBLIC`,
+  two levels down, so the scan descends one inside a `ghidra*` directory.
+- **Release zip** — `Ghidra.app/Contents/Resources/ghidra`; a `.app` name is
+  recognised and the bundle's inner path is pushed as well.
+- **Manual** — `/Applications`, `~/Applications`, `/opt`, `/usr/local`, `$HOME`.
+
+`collectGhidraHomes()` is shared by the macOS and Linux branches; it over-collects and
+lets `hasHeadless()` filter, which costs a `stat` and nothing else.
+
+### 7.3 `ghidra_doctor`
+
+Every failure in this document was diagnosed by hand, one hypothesis at a time. The
+doctor turns that into one read-only call, reachable three ways that share a single
+collector (`lib/doctor.js`): the `ghidra_doctor` tool, the `/api/dsh-ghidra/doctor`
+route, and the panel's *Run doctor* button. Sharing the collector is deliberate — two
+hand-maintained check lists eventually disagree, and "the panel says OK while the tool
+says FAIL" is the one failure a self-check must not have.
+
+It reports the platform, the Ghidra home *and how it was found*, the headless launcher,
+the version, whether the install path contains non-ASCII, the PyGhidra launcher, the
+interpreter and whether `pyghidra` imports, Java, the resolved user settings directory
+(the §7.1 trap, made visible), the GhidraMCP jar, the data root, the project directory's
+writability, and whether anything already holds the MCP port. Essential checks are
+marked, so an optional row that is merely *not yet* satisfied reads `IDLE`, not `FAIL`.
+
+It is **always advertised**, unlike the other native tools: gating a diagnostic behind
+the bridge it diagnoses would defeat it.
+
+### 7.4 Two smaller cross-platform defects
+
+**The interpreter cache ignored the config.** `pythonCommand()` memoised into a single
+unconditional slot, so changing `config.pythonVer` from 3.13 to 3.12 kept returning the
+old interpreter until DSH restarted. The cache is now keyed by the requested version.
+`candidatePythons()` also probes `python<ver>` before the generic `python3`/`python`, so
+a host carrying several interpreters selects the one the user named.
+
+**The folder picker had no starting point off Windows.** `/api/dsh-ghidra/list-dir`
+built its roots by scanning `A:`–`Z:`, which yields nothing on Linux or macOS and left
+the panel's directory picker empty. Windows keeps that drive scan verbatim; elsewhere
+the roots are `/`, `$HOME` and `/Volumes`.
+
+### 7.5 Verification
+
+`ghidra_doctor` was exercised through the real HTTP handler on Windows and returned
+16 rows, 5/5 essential, correctly resolving `%APPDATA%\ghidra\ghidra_12.1.4_PUBLIC` and
+the installed GhidraMCP 7.0.0 jar. The full openFlow was then run end to end —
+`cmd.exe` imported and analysed (1133 functions), the PyGhidra bridge started, the REST
+server bound in unified mode, `/health` returning `program_loaded: true`, then a clean
+stop and shutdown — confirming the port did not regress Windows.
