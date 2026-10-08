@@ -230,7 +230,7 @@ prompt 前缀缓存失效（每次 start/stop 一次），换来的是「模型�
 
 ## 配置（可选 · 可热改）
 
-11 个字段全部 **volatile**：在 DSH 的 **插件管理页**（侧边栏「插件」→ Ghidra 桥）的卡片表单里
+13 个字段全部 **volatile**：在 DSH 的 **插件管理页**（侧边栏「插件」→ Ghidra 桥）的卡片表单里
 直接改，**保存后立即生效，无需重启 DSH**（写侧 reload Loader entry 重跑 apply）。也可以走 cordis patch：
 
     - id: ghidra-bridge
@@ -247,6 +247,7 @@ prompt 前缀缓存失效（每次 start/stop 一次），换来的是「模型�
         mcpPort: 8123           # 上游 GhidraMCP headless 服务器端口
         mcpStartupTimeoutSec: 180
         mcpTimeoutSec: 900
+        githubToken: ''         # 可选：只给「Download Ghidra」查最新 release 用；留空回退 GH_TOKEN / GITHUB_TOKEN / gh auth token
 
 ## Settings 分区（状态 + 配置 + 健康检查 + 下载）
 
@@ -262,10 +263,14 @@ prompt 前缀缓存失效（每次 start/stop 一次），换来的是「模型�
   Python（`py -3.13 --version`）/ 双服务器运行态 / Ghidra 版本，每项 OK/FAIL + 详情；
   前置 4 项全过才 overall 通过，运行态为参考项。
 - **下载安装**：「Download Ghidra」→ `POST /api/dsh-ghidra/install-ghidra`（后台）：
-  GitHub 最新 release（`ghidra_*_PUBLIC_*.zip`）流式下载（进度 % + MB）→ PowerShell
-  `Expand-Archive` 解压到当前主目录旁 → 校验 `support/ghidraMCPHeadless.bat` →
+  GitHub 最新 release（`ghidra_*_PUBLIC_*.zip`）流式下载（进度 % + MB）→ 解压到当前主目录旁
+  （Windows 用 `Expand-Archive`，Linux/macOS 用 `unzip`，后者会还原 zip 里的可执行位）→
+  校验 `support/ghidraMCPHeadless.bat` →
   自动把 ghidraHome 切到新目录（走迁移流程删旧目录）。进度在 /status 的 `install` 字段。
-- **配置区**：12 字段表单（staged edits → 保存逐条写 + 读回 Host 验收；已覆盖字段带徽标 +
+  **查 release 得先过 GitHub API，而匿名配额只有 60 次/小时且按 IP 计**（共享出口很容易被
+  别人用光）——被限流时面板直接给出恢复时间与三种解法：填 `githubToken`、设
+  `GH_TOKEN`/`GITHUB_TOKEN`、或先 `gh auth login`；有 token 时配额 5000 次/小时。
+- **配置区**：13 字段表单（staged edits → 保存逐条写 + 读回 Host 验收；已覆盖字段带徽标 +
   单字段「重置」恢复默认；实时校验）。走 `ctx.configForms.get('ghidra-bridge')` 的 FormScope。
   **路径字段带「Browse…」按钮**：打开插件自己的文件夹浏览器（模态：驱动器列表 → 逐层进入 →
   「Use this folder」写回 draft，另有「Create folder」就地建目录）。选择器由本 UI 渲染，**不弹原生
@@ -305,15 +310,16 @@ prompt 前缀缓存失效（每次 start/stop 一次），换来的是「模型�
     ├── verify-load.mjs / verify.mjs / verify-tools.mjs / verify-batch3.mjs / verify-batch4.mjs / verify-mcp-e2e.mjs / fail-test.mjs / exit-test.mjs
     ├── kat-consts.py           # 批次 4 常量表的 KAT（62 条已知答案，脱离 Ghidra 单跑）
     └── *.mjs                   # 诊断脚本（probe-contrast / probe-client-apply / probe-v4-routes /
-                                #   probe-in-tree-e2e / probe-unified-e2e / probe-mcp-start / probe-union-args）
+                                #   probe-github-install / probe-in-tree-e2e / probe-unified-e2e /
+                                #   probe-mcp-start / probe-union-args）
 
 ## 验收
 
     node sync-installed.mjs               # 先把源码同步进两个已装副本（否则验的是旧代码）
     node verify-load.mjs [已装副本目录]   # 加载路径 + 219 个工具定义 + 门控只广告 6 个 +
                                           #   随包技能注册 + 桥工具 params 回归   → 21/21
-    node probe-availability.mjs [副本]    # 工具可用性门控：冷启动 5 → 服务器上线 173 →
-                                          #   下线回 5，撤门干净且幂等              → 14/14
+    node probe-availability.mjs [副本]    # 工具可用性门控：冷启动 6 → 服务器上线 174 →
+                                          #   下线回 6，撤门干净且幂等              → 14/14
     node probe-skill-registry.mjs         # 用真实的 @deepseek-ai/dsh-skill 注册表跑一遍
                                           #   register→list→get→render→dispose     → 10/10
                                           #   （找不到该包时 SKIP 退出 0）
@@ -321,6 +327,8 @@ prompt 前缀缓存失效（每次 start/stop 一次），换来的是「模型�
                                           #   11 组前景/背景算对比度（先按 alpha 合成）→ 27/27
     node probe-client-apply.mjs [副本]    # 浏览器半的契约：注册项/渲染/原生 <dialog>/源码守卫 → 34/34
     node probe-v4-routes.mjs              # 7 条 HTTP 路由 + doctor 路由逐个实调     → 16/16
+    node probe-github-install.mjs         # 「Download Ghidra」：token 三级回退、403 可读化、
+                                          #   跨平台解压计划、面板字段不漂移          → 20/20
     node verify.mjs                       # lib 层：探测→导入→起服务器→op 往返 → 15/15
     node verify-tools.mjs                 # 工具层：批次 1/2 全部实调 + 失败用例 → 85/85
     node verify-batch3.mjs                # 批次 3 的 14 个新工具（含落盘回归）   → 77/77

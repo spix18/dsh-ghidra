@@ -86,7 +86,7 @@ let config = null
 try { config = mod.Config({ mcpPort: freePort }) } catch (e) { /* 下面统一判定 */ }
 // volatile 字段的默认值是 ref（.get() 恒答当前值）—— 读法与 index.js 的 resolveConfig 一致
 const val = (x) => { const v = config ? config[x] : undefined; return typeof (v && v.get) === 'function' ? v.get() : v }
-check('Config 填充出 12 个默认项', !!config && Object.keys(config).length === 12,
+check('Config 填充出 13 个默认项', !!config && Object.keys(config).length === 13,
   config ? Object.keys(config).join('/') : 'Config 不可调用')
 check('默认 pythonVer=3.13 / projectName=dsh / mcpMode=unified（mcpPort 由验收指定）',
   val('pythonVer') === '3.13' && val('projectName') === 'dsh' && val('mcpMode') === 'unified' && val('mcpPort') === freePort,

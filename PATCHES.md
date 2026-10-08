@@ -788,3 +788,81 @@ extract-upstream-tools.py  endpoints.json  UPSTREAM-TOOLS.json  UPSTREAM-TREE.tx
 而不是断言某个声明字符串存在 —— 这一轮修掉的两个 P1 全是「字符串在、效果没了」，
 和上一轮那个 alpha 截断 bug 属于同一种失败形态。
 
+## 0.11.3 — 「Download Ghidra」的 GitHub 配额 403，与一个 Linux 上必死的解压分支
+
+报障原话：`download ghidra button gives this issue "Install failed: GitHub API 403"`。
+
+### 1. 根因不是权限，是配额（匿名 60 次/小时，按 IP 计）
+
+`/repos/NationalSecurityAgency/ghidra/releases/latest` 不带 `Authorization` 时，用
+`curl.exe` 原样复现了报障（连插件发的那两个头一起带上）：
+
+```
+HTTP/1.1 403 rate limit exceeded
+X-RateLimit-Limit: 60      X-RateLimit-Remaining: 0     X-RateLimit-Used: 60
+X-RateLimit-Resource: core X-RateLimit-Reset: 1791452658   x-github-edge-region: fra
+{"message":"API rate limit exceeded for 105.98.99.57. ..."}
+```
+
+**决定性对照**：把请求头全部去掉，返回的是一模一样的 403 —— 说明和插件发的
+`user-agent`/`accept` 无关，也和最近的任何改动无关；换成 `Authorization: Bearer <token>`
+后同一端点立刻 `200 OK`，并带上 `X-RateLimit-Limit: 5000`。所以根因只有一个：
+**匿名调 GitHub API 只有 60 次/小时、按出口 IP 计，而这台机器的共享出口 105.98.99.57
+把 60 次用完了**（诊断时距 reset 还有 46.1 分钟）。
+
+顺带否掉了两个「看起来更省事」的方案：抓 release 的 HTML 页面（资源名
+`ghidra_12.1.4_PUBLIC_20260921.zip` 里嵌着构建日期，无法用纯字符串规则拼出下载地址，
+只能解析页面 —— 上游改版就碎），以及改写请求头重试（已证实无效）。
+
+### 2. 第二重缺陷：错误信息把全部线索都丢了
+
+`index.js:157` 只抛 `'GitHub API ' + res.status + ' ' + res.statusText`，
+把响应体（里面直接写着出口 IP 和「认证请求配额更高」）和三个 `x-ratelimit-*` 头
+（里面写着**什么时候**恢复）全部吞掉。用户看到的就是光秃秃的 `GitHub API 403`，
+既不知道是配额、也不知道等多久、更不知道有 token 这回事 —— 这才是他不得不来问的原因。
+现在 `githubError(res)` 会给出：配额用尽（非权限问题）、预计恢复时间（约 N 分钟后）、
+服务器原话（含 IP，可判断是不是共享出口被别人用光）、以及三种解法。
+
+### 3. 顺带发现的第三重缺陷：Linux/macOS 上「Download Ghidra」本来就必死
+
+解压走的是 `execFileP('powershell', ['-Command', 'Expand-Archive …'])`。非 Windows 上
+没有 `powershell` 这个命令，所以这个按钮从 0.11.0 起在 Linux/macOS 上按下去只会 `ENOENT`
+—— 是上一轮 Linux 移植漏掉的真实缺口（`runMigrate` 不 shell out，所以只有安装受影响）。
+现在 `extractPlan(platform, zip, dest)` 分平台：win32 原样保留 `Expand-Archive`，
+其余平台 `unzip -q -o <zip> -d <dest>`。选 `unzip` 而不是 `python -m zipfile` 是因为
+后者不还原 zip 里的可执行位，而 `analyzeHeadless` 需要它；`unzip` 自己也缺时，
+错误直接给出 `apt install unzip` / `dnf install unzip`。
+
+### 4. 新增配置字段与它的漂移陷阱
+
+新增 `githubToken`（第 13 个字段），回退链 `config.githubToken` → `GH_TOKEN` →
+`GITHUB_TOKEN` → `gh auth token`。资源下载（`github.com/...zip`）**故意不带**
+`Authorization`：它是公开资源，且跨主机重定向会把头丢掉。
+
+`client.js` 的 `FIELDS` 是**手写白名单**，与 `sync-installed.mjs` 的 `FILES` 是同一种
+漂移陷阱 —— 服务端有字段而面板没列，表现是「功能全对但用户找不到入口，只能靠环境变量」。
+所以新探针里给这两张手写清单加了等式守卫：`FIELDS` 的 `field:` 计数必须等于 `Config` 字段数。
+
+### 5. 回归守卫 `probe-github-install.mjs`（新，20/20）
+
+四组：分平台解压计划（含 win32 非回归）；token 三级回退与优先级；**实调**
+`/install-ghidra` 路由（匿名 403 必须给出配额/恢复时间/GH_TOKEN/githubToken/5000/IP，
+且旧的 `^GitHub API 403` 形态必须消失；配了 token 时请求真的带上 `Bearer`；
+release JSON 里真的选中 `*_PUBLIC_*.zip`；下载层的 500 不能被误报成 API 层错误）；
+面板字段等式守卫。
+
+写这个探针时自己踩了一个坑，值得记下来：**第一版把 `globalThis.fetch` 整个换掉了**，
+于是 `/status` 顺带做的 GhidraMCP 本机探活（`mcpHealth`）也被拦下，把桩的响应队列抽干，
+下载那次 fetch 拿到空队列，报出一个与真实根因毫无关系的 `unexpected fetch`。
+改成只拦 GitHub 域名、其余原样放给真 fetch 之后才通过（`calls` 也从 3 变回 1）。
+
+### 6. 真机验证
+
+装好副本上跑真实网络（唯一能证明这次修复成立的方式）：`githubToken({})` 解析出
+`source=gh auth token`、长度 40，随后真实请求 `api.github.com` 返回
+**`200 (523ms)`、`ratelimit 4997/5000`、`Ghidra_12.1.4_build -> ghidra_12.1.4_PUBLIC_20260921.zip`**
+—— 正是先前 403 的那一次操作。整套探针复跑全绿：`verify-load` / `probe-v4-routes 16/16` /
+`probe-availability` / `probe-client-apply 34/34` / `probe-contrast 27/27` /
+`probe-skill-registry 10/10` / `probe-github-install 20/20`。
+
+

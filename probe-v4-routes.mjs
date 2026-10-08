@@ -29,7 +29,7 @@ const mockCtx = {
 
 // volatile 配置桩（全部字段 .get()）
 const cfg = {}
-for (const k of ['ghidraHome', 'ghidraProjectDir', 'projectName', 'pythonVer', 'analysisTimeoutSec', 'serverStartupTimeoutMs', 'maxOutputChars', 'stream', 'mcpPort', 'mcpStartupTimeoutSec', 'mcpTimeoutSec']) {
+for (const k of ['ghidraHome', 'ghidraProjectDir', 'projectName', 'pythonVer', 'analysisTimeoutSec', 'serverStartupTimeoutMs', 'maxOutputChars', 'stream', 'mcpPort', 'mcpStartupTimeoutSec', 'mcpTimeoutSec', 'githubToken']) {
   cfg[k] = { get: () => undefined }
 }
 cfg.pythonVer = { get: () => '3.13' }

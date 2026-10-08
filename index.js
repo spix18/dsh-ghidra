@@ -9,7 +9,7 @@ import { detectGhidraHome, readVersion, pyghidraInstalled, importBinary, startSe
 import { killPid, pidAlive, sleep } from './lib/run.js'
 import { mcpStart, mcpCall, mcpStop, mcpHealth, LOG_FILE as MCP_LOG_FILE, MCP_DEFAULT_PORT } from './lib/mcp.js'
 import { MCP_TOOLS } from './lib/mcp-tools.js'
-import { spawnSync, execFile } from 'node:child_process'
+import { spawnSync, execFile, execFileSync } from 'node:child_process'
 import { promisify } from 'node:util'
 import { Readable, Transform } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
@@ -35,6 +35,7 @@ export const Config = Schema.object({
   mcpMode: Schema.string().default('unified').description('MCP 承载方式：unified=在 PyGhidra 桥的同一个 JVM 内启动上游 REST 服务器并绑定同一程序（单进程，推荐）；standalone=独立启动 ghidraMCPHeadless.bat（第二个 Ghidra 进程）').volatile(),
   mcpStartupTimeoutSec: Schema.number().default(180).description('GhidraMCP 服务器启动超时（秒）').volatile(),
   mcpTimeoutSec: Schema.number().default(900).description('GhidraMCP 工具调用超时（秒）').volatile(),
+  githubToken: Schema.string().default('').description('GitHub token（可选）：只用于「Download Ghidra」查询最新 release。留空则依次回退 GH_TOKEN、GITHUB_TOKEN、gh auth token。匿名调用 GitHub API 只有 60 次/小时且按 IP 计，token 提高到 5000 次/小时').volatile(),
 }).description('Ghidra 桥配置（字段全部可热改：保存后立即生效，无需重启 DSH）')
 
 const OUT = {
@@ -147,14 +148,80 @@ const migrateState = { running: false, phase: '', error: '', from: null, to: nul
 // 随包技能（skills/dsh-ghidra/SKILL.md → ctx.skills.register）的注册结果，状态路由上报
 const skillState = { registered: false, name: null, file: SKILL_FILE, error: '' }
 
-// ---- Ghidra 下载安装（GitHub 最新 release → 下载 → PowerShell 解压 → 校验）----
+// ---- Ghidra 下载安装（GitHub 最新 release → 下载 → 解压 → 校验）----
 // 后台执行（execFile 不阻塞宿主事件循环）；进度写 installState，状态路由上报。
+
+// 匿名 GitHub API 只有 60 次/小时，而且按【IP】计：共享出口/NAT 后面别人用完了，我们这边
+// 也会直接 403，而 403 的文本里只有一个状态码 —— 所以先去找 token，找不到也要把话讲清楚。
+export function githubToken(config) {
+  const fromConfig = String(config?.githubToken || '').trim()
+  if (fromConfig) return { token: fromConfig, source: 'config' }
+  for (const k of ['GH_TOKEN', 'GITHUB_TOKEN']) {
+    const v = String(process.env[k] || '').trim()
+    if (v) return { token: v, source: k }
+  }
+  // gh 已经登录过就直接借用它的 token（只读公开 API，不会改动任何东西）
+  try {
+    const t = execFileSync('gh', ['auth', 'token'], { encoding: 'utf8', timeout: 5000, stdio: ['ignore', 'pipe', 'ignore'] }).trim()
+    if (t) return { token: t, source: 'gh auth token' }
+  } catch {}
+  return { token: '', source: '' }
+}
+
+// GitHub 的 403 几乎总是配额而不是权限。把 body 里的 message 和配额头一起读出来，
+// 才可能告诉用户「什么时候能重试」和「怎么把配额抬上去」。
+export async function githubError(res) {
+  let msg = ''
+  try { const j = await res.json(); msg = (j && j.message) || '' } catch {}
+  const remaining = res.headers.get('x-ratelimit-remaining')
+  const reset = Number(res.headers.get('x-ratelimit-reset') || 0)
+  if ((res.status === 403 || res.status === 429) && (remaining === '0' || /rate limit/i.test(msg))) {
+    let when = ''
+    if (reset > 0) {
+      const mins = Math.max(1, Math.ceil((reset * 1000 - Date.now()) / 60000))
+      when = '，预计 ' + new Date(reset * 1000).toLocaleTimeString() + ' 恢复（约 ' + mins + ' 分钟后）'
+    }
+    return 'GitHub API 配额用尽（匿名每小时 60 次，按 IP 计）' + when + '。'
+      + (msg ? '服务器原话：' + msg + ' ' : '')
+      + '可任选其一提高配额：在插件配置里填 githubToken、设置环境变量 GH_TOKEN/GITHUB_TOKEN、或先跑 gh auth login（有 token 时每小时 5000 次）。'
+  }
+  return 'GitHub API ' + res.status + ' ' + res.statusText + (msg ? ' — ' + msg : '')
+}
+
+// 解压器按平台挑：Windows 用自带的 PowerShell Expand-Archive；
+// POSIX 用 unzip —— macOS 自带、主流发行版也都有，而且它会还原 zip 里的可执行位
+// （analyzeHeadless 必须可执行，python -m zipfile 不还原权限位）。
+export function extractPlan(platform, zipPath, destRoot) {
+  if (platform === 'win32') {
+    return [{ file: 'powershell', args: ['-NoProfile', '-NonInteractive', '-Command',
+      'Expand-Archive -LiteralPath "' + zipPath + '" -DestinationPath "' + destRoot + '" -Force'] }]
+  }
+  return [{ file: 'unzip', args: ['-q', '-o', zipPath, '-d', destRoot] }]
+}
+
+async function extractZip(platform, zipPath, destRoot) {  const plan = extractPlan(platform, zipPath, destRoot)
+  for (const p of plan) {
+    try {
+      await execFileP(p.file, p.args, { timeout: 900000 })
+      return p.file
+    } catch (e) {
+      if (e?.code === 'ENOENT') {
+        throw new Error('解压失败：找不到 ' + p.file + ' 命令'
+          + (platform === 'win32' ? '' : '（Debian/Ubuntu：apt install unzip；Fedora：dnf install unzip；macOS 自带）'))
+      }
+      throw e
+    }
+  }
+}
+
 async function runInstall(targetRoot, force) {
-  const ua = { headers: { 'user-agent': 'dsh-ghidra-plugin', accept: 'application/vnd.github+json' } }
   try {
     installState.phase = 'resolving latest release'
-    const rel = await fetch('https://api.github.com/repos/NationalSecurityAgency/ghidra/releases/latest', ua)
-    if (!rel.ok) throw new Error('GitHub API ' + rel.status + ' ' + rel.statusText)
+    const auth = githubToken(currentConfig)
+    const headers = { 'user-agent': 'dsh-ghidra-plugin', accept: 'application/vnd.github+json' }
+    if (auth.token) headers.authorization = 'Bearer ' + auth.token
+    const rel = await fetch('https://api.github.com/repos/NationalSecurityAgency/ghidra/releases/latest', { headers })
+    if (!rel.ok) throw new Error(await githubError(rel))
     const meta = await rel.json()
     const asset = (meta.assets || []).find((a) => /ghidra_.*_PUBLIC_.*\.zip$/i.test(String(a.name || '')))
     if (!asset) throw new Error('no Ghidra *_PUBLIC_*.zip asset in release ' + (meta.tag_name || meta.name || '?'))
@@ -175,11 +242,10 @@ async function runInstall(targetRoot, force) {
       },
     })
     await pipeline(Readable.fromWeb(zres.body), counter, createWriteStream(zipPath))
-    // 解压：zip 根目录是 ghidra_<ver>_PUBLIC/；-Force 允许覆盖（reinstall 同版本）
+    // 解压：zip 根目录是 ghidra_<ver>_PUBLIC/；-Force/-o 允许覆盖（reinstall 同版本）
     installState.phase = 'extracting'
     installState.pct = 0
-    await execFileP('powershell', ['-NoProfile', '-NonInteractive', '-Command',
-      'Expand-Archive -LiteralPath "' + zipPath + '" -DestinationPath "' + targetRoot + '" -Force'], { timeout: 900000 })
+    await extractZip(process.platform, zipPath, targetRoot)
     // 探测解压出的 home：targetRoot 下最新修改的 ghidra_* 目录
     const dirs = readdirSync(targetRoot, { withFileTypes: true })
       .filter((d) => d.isDirectory() && /^ghidra_/i.test(d.name))

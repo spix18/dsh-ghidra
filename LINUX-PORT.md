@@ -334,6 +334,18 @@ built its roots by scanning `A:`–`Z:`, which yields nothing on Linux or macOS 
 the panel's directory picker empty. Windows keeps that drive scan verbatim; elsewhere
 the roots are `/`, `$HOME` and `/Volumes`.
 
+**`Download Ghidra` could never work off Windows.** This one is easy to miss because it
+is not a detection bug that fails loudly at startup — it is a feature that only breaks
+when a user presses the button on a non-Windows host. The installer extracted the release
+zip by shelling out to `powershell -Command Expand-Archive`, so on Linux or macOS the
+button was guaranteed to fail with `ENOENT`. Extraction now goes through
+`extractPlan(platform, zip, dest)`: Windows keeps `Expand-Archive` verbatim, and
+everywhere else runs `unzip -q -o <zip> -d <dest>`. `unzip` is preferred over
+`python -m zipfile` because it restores the archive's executable bits, which
+`analyzeHeadless` needs — `zipfile` writes regular files and would leave the launcher
+non-executable. When `unzip` itself is missing, the error names the per-distro install
+command (`apt install unzip` / `dnf install unzip`) instead of surfacing a bare `ENOENT`.
+
 ### 7.5 Verification
 
 `ghidra_doctor` was exercised through the real HTTP handler on Windows and returned

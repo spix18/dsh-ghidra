@@ -25,6 +25,7 @@ window.__ModuleLoader__.load({
       { field: 'mcpMode', label: 'MCP hosting mode', kind: 'text', help: 'unified = run the upstream REST server inside the PyGhidra bridge JVM on the same program (single process, recommended); standalone = separate ghidraMCPHeadless.bat process' },
       { field: 'mcpStartupTimeoutSec', label: 'MCP startup timeout (sec)', kind: 'number' },
       { field: 'mcpTimeoutSec', label: 'MCP call timeout (sec)', kind: 'number' },
+      { field: 'githubToken', label: 'GitHub token (optional)', kind: 'text', help: 'Only used by "Download Ghidra" to look up the latest release. Leave empty to fall back to GH_TOKEN / GITHUB_TOKEN / gh auth token. Anonymous GitHub API calls are capped at 60/hour per IP; a token raises that to 5000/hour' },
     ]
 
     const numField = (max) => ({
