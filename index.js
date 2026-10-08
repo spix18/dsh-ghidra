@@ -11,8 +11,10 @@ import { mcpStart, mcpCall, mcpStop, mcpHealth, LOG_FILE as MCP_LOG_FILE, MCP_DE
 import { MCP_TOOLS } from './lib/mcp-tools.js'
 import { spawnSync, execFile, execFileSync } from 'node:child_process'
 import { promisify } from 'node:util'
-import { Readable, Transform } from 'node:stream'
+import { Transform } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
+import { get as httpGet } from 'node:http'
+import { get as httpsGet } from 'node:https'
 import { ensureDataPaths, pluginDataRoot, defaultProjectDir } from './lib/paths.js'
 import { loadSkillDefinition, SKILL_FILE } from './lib/skill.js'
 import { runDoctor } from './lib/doctor.js'
@@ -214,6 +216,37 @@ async function extractZip(platform, zipPath, destRoot) {  const plan = extractPl
   }
 }
 
+// 资产下载走 node:http(s)，不走 fetch。同一台机器、同一个已签名 URL 实测：undici 的 fetch
+// 5.5~6.6 MB/s，node:https 31.4 MB/s，curl 35.2 MB/s —— 慢 5~6 倍。三种消费方式（arrayBuffer、
+// Readable.fromWeb+pipeline、for-await）一样慢，调大 highWaterMark 也没用，所以瓶颈在 undici
+// 自身的读路径，不在消费端，换消费方式治不好。API 的 JSON 很小，继续用 fetch 没问题；
+// 543 MB 的 zip 用 fetch 就是从 ~18 秒变成 ~70 秒。跟随重定向：GitHub 的 browser_download_url
+// 会 302 到 release-assets.githubusercontent.com 的签名地址。
+export function downloadToFile(url, destPath, onBytes, redirects = 0) {
+  return new Promise((resolve, reject) => {
+    const get = String(url).startsWith('https:') ? httpsGet : httpGet
+    const req = get(url, { headers: { 'user-agent': 'dsh-ghidra-plugin' } }, (res) => {
+      const code = res.statusCode || 0
+      if (code >= 300 && code < 400 && res.headers.location) {
+        res.resume()
+        if (redirects >= 5) return reject(new Error('download failed: too many redirects'))
+        resolve(downloadToFile(new URL(res.headers.location, url).href, destPath, onBytes, redirects + 1))
+        return
+      }
+      if (code !== 200) {
+        res.resume()
+        reject(new Error('download failed: HTTP ' + code))
+        return
+      }
+      const counter = new Transform({
+        transform(chunk, _enc, cb) { onBytes(chunk.length); cb(null, chunk) },
+      })
+      pipeline(res, counter, createWriteStream(destPath)).then(resolve, reject)
+    })
+    req.on('error', reject)
+  })
+}
+
 async function runInstall(targetRoot, force) {
   try {
     installState.phase = 'resolving latest release'
@@ -230,18 +263,12 @@ async function runInstall(targetRoot, force) {
     installState.total = asset.size || 0
     installState.bytes = 0
     installState.log = asset.browser_download_url
-    const zres = await fetch(asset.browser_download_url, { headers: { 'user-agent': 'dsh-ghidra-plugin' } })
-    if (!zres.ok || !zres.body) throw new Error('download failed: HTTP ' + zres.status)
     let done = 0
-    const counter = new Transform({
-      transform(chunk, _enc, cb) {
-        done += chunk.length
-        installState.bytes = done
-        if (installState.total) installState.pct = Math.round((done * 100) / installState.total)
-        cb(null, chunk)
-      },
+    await downloadToFile(asset.browser_download_url, zipPath, (n) => {
+      done += n
+      installState.bytes = done
+      if (installState.total) installState.pct = Math.round((done * 100) / installState.total)
     })
-    await pipeline(Readable.fromWeb(zres.body), counter, createWriteStream(zipPath))
     // 解压：zip 根目录是 ghidra_<ver>_PUBLIC/；-Force/-o 允许覆盖（reinstall 同版本）
     installState.phase = 'extracting'
     installState.pct = 0

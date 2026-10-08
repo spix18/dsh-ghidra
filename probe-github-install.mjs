@@ -7,8 +7,13 @@
 //   1. 有 token 时，请求真的带上了 Authorization 头（不是"代码里写了这个分支"）
 //   2. 没 token 时，错误文本真的包含恢复时间与补救办法
 //   3. POSIX 平台真的不再调用 powershell（Linux 上根本没有这个命令）
+//   4. 资产下载真的绕开 undici 的 fetch（本机实测 fetch ~6 MB/s、node:https 31 MB/s，
+//      差 5~6 倍；判据是"把 fetch 换成会抛错的桩，下载照样完成"）
 import { join } from 'node:path'
-import { readFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { createServer } from 'node:http'
+import { createHash } from 'node:crypto'
+import { readFileSync, rmSync } from 'node:fs'
 import { fileUrl, installedDir, REPO_ROOT } from './lib/dev-env.mjs'
 
 const results = []
@@ -96,9 +101,13 @@ const rateLimited = () => new Response(
   } })
 
 // 真实抓下来的 release 形状（2026-10-08 实测）
-const releaseJson = () => new Response(JSON.stringify({
+const releaseJson = (dlUrl) => new Response(JSON.stringify({
   tag_name: 'Ghidra_12.1.4_build',
-  assets: [{ name: 'ghidra_12.1.4_PUBLIC_20260921.zip', size: 569732197, browser_download_url: 'https://github.com/NationalSecurityAgency/ghidra/releases/download/Ghidra_12.1.4_build/ghidra_12.1.4_PUBLIC_20260921.zip' }],
+  assets: [
+    // 诱饵：真实的 Ghidra release 里就有这种 .zip.sha256 资产，名字里同样含 _PUBLIC_
+    { name: 'ghidra_12.1.4_PUBLIC_20260921.zip.sha256', size: 128, browser_download_url: dlUrl + '?decoy=1' },
+    { name: 'ghidra_12.1.4_PUBLIC_20260921.zip', size: 569732197, browser_download_url: dlUrl },
+  ],
 }), { status: 200, headers: { 'content-type': 'application/json' } })
 
 const settle = async () => {
@@ -110,6 +119,31 @@ const settle = async () => {
   throw new Error('install 状态一直没有停下')
 }
 const startInstall = () => callRoute('/api/dsh-ghidra/install-ghidra', 'POST', JSON.stringify({ force: true }))
+
+// ---- 本机资产服务器 ----
+// 下载改成 node:https 之后，fetch 桩就再也拦不到它了（这正是修复的本体），所以下载层
+// 只能用真的 HTTP 服务来验。顺带拿到了真实请求头：以前「下载不带 Authorization」是从
+// 桩里推断的，现在是服务器实际观察到的。
+const PAYLOAD = Buffer.alloc(8 * 1024 * 1024)
+for (let i = 0; i < PAYLOAD.length; i++) PAYLOAD[i] = i % 251
+const PAYLOAD_SHA = createHash('sha256').update(PAYLOAD).digest('hex')
+const seen = []
+let port = 0
+const assetSrv = createServer((req, res) => {
+  seen.push({ url: req.url, headers: req.headers })
+  if (req.url === '/download-404') { res.writeHead(404); res.end('nope'); return }
+  if (req.url === '/loop') { res.writeHead(302, { location: 'http://127.0.0.1:' + port + '/loop' }); res.end(); return }
+  if (req.url === '/download') { res.writeHead(302, { location: '/file' }); res.end(); return }
+  if (req.url === '/file') {
+    res.writeHead(200, { 'content-type': 'application/zip', 'content-length': String(PAYLOAD.length) })
+    res.end(PAYLOAD)
+    return
+  }
+  res.writeHead(404); res.end('nope')
+})
+await new Promise((r) => assetSrv.listen(0, '127.0.0.1', r))
+port = assetSrv.address().port
+const assetUrl = (p) => 'http://127.0.0.1:' + port + p
 
 // ============ 1. 解压计划按平台挑（Linux 移植点）============
 const win = mod.extractPlan('win32', 'C:\\z.zip', 'C:\\out')
@@ -172,20 +206,57 @@ if (!byPath['/api/dsh-ghidra/install-ghidra']) { check('install-ghidra 路由存
     calls.length === 1 && calls[0].headers.authorization === 'Bearer CFG_TOKEN',
     'auth=' + String(calls[0] && calls[0].headers.authorization))
 
-  // 3c. release 解析成功 → 真的选中 *_PUBLIC_*.zip，下载 URL 落到 install.log
-  stubFetch([releaseJson(), new Response('boom', { status: 500, statusText: 'Server Error' })])
+  // 3c. release 解析成功 → 真的选中 *_PUBLIC_*.zip，下载走本机资产服务器
+  stubFetch([releaseJson(assetUrl('/download-404'))])
   await startInstall()
   const ins3 = await settle()
-  check('release JSON 解析后选中了真实的 *_PUBLIC_*.zip 资源',
-    /ghidra_12\.1\.4_PUBLIC_20260921\.zip/.test(String(ins3.log)), String(ins3.log).slice(0, 90))
+  check('release JSON 解析后选中了真正的 *_PUBLIC_*.zip 资产（跳过 .zip.sha256 诱饵）',
+    String(ins3.log) === assetUrl('/download-404'), 'log=' + String(ins3.log).slice(0, 90))
   check('资源下载失败时错误是下载层的（说明 API 这一层已经过了）',
-    /download failed: HTTP 500/.test(ins3.error), ins3.error.slice(0, 90))
-  check('资源下载不带 Authorization（公开资源；带了反而可能被跨主机重定向丢掉）',
-    calls.length === 2 && !calls[1].headers.authorization, 'download auth=' + String(calls[1] && calls[1].headers.authorization))
+    /download failed: HTTP 404/.test(ins3.error), ins3.error.slice(0, 90))
+  check('API 查询走 fetch、下载不走 fetch（下载层不出现在 undici 的调用记录里）',
+    calls.length === 1, 'fetch 调用次数=' + calls.length)
   setToken('')
 }
 
-// ============ 4. 面板必须真的能填这个 token ============
+// ============ 4. 下载层：绕开 fetch、跟随重定向、字节一致、错误可辨 ============
+const dlDest = join(tmpdir(), 'dsh-ghidra-probe-dl.zip')
+rmSync(dlDest, { force: true })
+
+let ticks = 0
+let tickBytes = 0
+await mod.downloadToFile(assetUrl('/download'), dlDest, (n) => { ticks++; tickBytes += n })
+const onDisk = readFileSync(dlDest)
+check('downloadToFile 跟随 302 并写出与源逐字节一致的文件',
+  onDisk.length === PAYLOAD.length && createHash('sha256').update(onDisk).digest('hex') === PAYLOAD_SHA,
+  onDisk.length + ' bytes，sha256 一致')
+check('onBytes 是流式回调（进度条靠它，不是传完才一次性调用）',
+  ticks > 1 && tickBytes === PAYLOAD.length, ticks + ' 次回调，合计 ' + tickBytes + ' bytes')
+
+const dlSeen = seen.filter((s) => s.url === '/download' || s.url === '/file')
+check('下载的两个请求都不带 Authorization（公开资源；跨主机重定向会把它丢掉）',
+  dlSeen.length === 2 && dlSeen.every((s) => !s.headers.authorization), '服务器实际看到 ' + dlSeen.length + ' 个请求')
+
+let e404 = ''
+try { await mod.downloadToFile(assetUrl('/download-404'), dlDest, () => {}) } catch (e) { e404 = String(e.message) }
+check('404 报下载层错误，而不是静默留下一个空文件', e404 === 'download failed: HTTP 404', e404)
+
+let eLoop = ''
+try { await mod.downloadToFile(assetUrl('/loop'), dlDest, () => {}) } catch (e) { eLoop = String(e.message) }
+check('重定向环不会无限跟随（上限 5 跳）', /too many redirects/.test(eLoop), eLoop)
+
+// 本条是本次修复的本体：把 globalThis.fetch 换成会抛错的桩，下载仍必须照常完成。
+const fetchBefore = globalThis.fetch
+let fetchHits = 0
+globalThis.fetch = async () => { fetchHits++; throw new Error('downloadToFile 不该碰 fetch') }
+let dlOk = true
+try { await mod.downloadToFile(assetUrl('/file'), dlDest, () => {}) } catch { dlOk = false }
+globalThis.fetch = fetchBefore
+check('下载完全不经过 globalThis.fetch（undici 本机 ~6 MB/s、node:https 31 MB/s）',
+  fetchHits === 0 && dlOk, 'fetch 调用次数=' + fetchHits)
+rmSync(dlDest, { force: true })
+
+// ============ 5. 面板必须真的能填这个 token ============
 // client.js 的 FIELDS 是手写清单（和 sync-installed.mjs 的 FILES 同一个坑）：
 // 配置字段加了却没进 FIELDS，面板上永远填不了，而服务端一切正常。
 const fieldRefs = (readFileSync(join(REPO_ROOT, 'client.js'), 'utf8').match(/field:\s*'/g) || []).length
@@ -194,6 +265,7 @@ check('面板 FIELDS 里有 githubToken（否则用户没地方填，只能靠�
 check('面板字段数与 Config 字段数一致（两处手写清单不许漂移）', fieldRefs === 13, 'FIELDS=' + fieldRefs + ' Config=13')
 
 globalThis.fetch = realFetch
+assetSrv.close()
 
 console.log('')
 const fails = results.filter((r) => !r.ok).length

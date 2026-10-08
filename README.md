@@ -267,6 +267,8 @@ prompt 前缀缓存失效（每次 start/stop 一次），换来的是「模型�
   （Windows 用 `Expand-Archive`，Linux/macOS 用 `unzip`，后者会还原 zip 里的可执行位）→
   校验 `support/ghidraMCPHeadless.bat` →
   自动把 ghidraHome 切到新目录（走迁移流程删旧目录）。进度在 /status 的 `install` 字段。
+  下载走 `node:https`（跟随 302 到签名 CDN 地址），**刻意不用宿主全局 `fetch`**：同一台机器、
+  同一个 URL 实测 undici 的 `fetch` 只有 ~6 MB/s，`node:https` 31 MB/s，543 MB 的包 70 秒 vs 9 秒。
   **查 release 得先过 GitHub API，而匿名配额只有 60 次/小时且按 IP 计**（共享出口很容易被
   别人用光）——被限流时面板直接给出恢复时间与三种解法：填 `githubToken`、设
   `GH_TOKEN`/`GITHUB_TOKEN`、或先 `gh auth login`；有 token 时配额 5000 次/小时。
@@ -328,7 +330,9 @@ prompt 前缀缓存失效（每次 start/stop 一次），换来的是「模型�
     node probe-client-apply.mjs [副本]    # 浏览器半的契约：注册项/渲染/原生 <dialog>/源码守卫 → 34/34
     node probe-v4-routes.mjs              # 7 条 HTTP 路由 + doctor 路由逐个实调     → 16/16
     node probe-github-install.mjs         # 「Download Ghidra」：token 三级回退、403 可读化、
-                                          #   跨平台解压计划、面板字段不漂移          → 20/20
+                                          #   跨平台解压计划、面板字段不漂移、
+                                          #   下载层（本机 HTTP 服务器：302/字节一致/404/重定向环）
+                                          #   + 断言下载不碰 globalThis.fetch         → 26/26
     node verify.mjs                       # lib 层：探测→导入→起服务器→op 往返 → 15/15
     node verify-tools.mjs                 # 工具层：批次 1/2 全部实调 + 失败用例 → 85/85
     node verify-batch3.mjs                # 批次 3 的 14 个新工具（含落盘回归）   → 77/77

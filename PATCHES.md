@@ -866,3 +866,70 @@ release JSON 里真的选中 `*_PUBLIC_*.zip`；下载层的 500 不能被误报
 `probe-skill-registry 10/10` / `probe-github-install 20/20`。
 
 
+
+## 0.11.4 — 下载慢 6 倍：把资产下载从 undici 的 fetch 换成 `node:https`
+
+用户报障（原文）：「works but the download speed is slow, is that normal considering my
+download speed is about 600 down and 200 up」。0.11.3 让 Download Ghidra 能用了，但 543 MB
+的包要走 70 秒 —— 用户的 600 Mbps 线路本身没问题，慢在我们这边。
+
+### 1. 根因：不是线路、不是磁盘、不是消费端，是 undici 自己的读路径
+
+排查按 systematic-debugging 的顺序做，每一步都在同一台机器、同一个已签名 URL 上跑：
+
+| 方式 | 50 MB 用时 | 速率 |
+| --- | --- | --- |
+| `curl --http1.1`（基线） | 1.42 s | 35.2 MB/s |
+| V1 `fetch` + `arrayBuffer()` | 7.57 s | 6.6 MB/s |
+| V2 `fetch` + `Readable.fromWeb` + pipeline（**修复前的插件**） | 8.62 s | 5.8 MB/s |
+| V3 同 V2，但 web stream 的 `highWaterMark` 调到 1 MB | 8.73 s | 5.7 MB/s |
+| V4 `fetch` + `for await (… of res.body)` | 9.17 s | 5.5 MB/s |
+| V5 **`node:https` data 事件** | 1.59 s | **31.4 MB/s** |
+
+四种 fetch 消费方式一样地慢 —— 连完全不做背压的 `arrayBuffer()` 也一样，把
+`highWaterMark` 调大同样没用，所以瓶颈在 undici 的 socket/读路径，不在我们的
+`Transform`、不在 `createWriteStream`、不在磁盘（另有一组「纯网络不落盘」的对照，
+100 MB 12.86 s = 7.8 MB/s，同样慢，磁盘被排除）。
+
+排除项：环境里没有任何 proxy 变量；`release-assets.githubusercontent.com` 只有 A 记录
+（`185.199.109.133` 等四个），`--dns-result-order=ipv4first` / `ipv6first` 分别 7.6 / 7.0 MB/s，
+与地址族无关；`curl` 在同一分钟内自身在 19–50 MB/s 之间波动，说明 GitHub 端没有硬上限，
+**只有 Node 的 fetch 是一条平线**。
+
+### 2. 修复
+
+`index.js` 新增导出 `downloadToFile(url, destPath, onBytes, redirects = 0)`：用
+`node:https` / `node:http` 取流，手动跟随最多 5 跳 302（GitHub 的 `browser_download_url`
+会跳到 `release-assets.githubusercontent.com` 的签名地址），非 200 直接抛
+`download failed: HTTP <code>`，每块数据回调 `onBytes`。`runInstall` 的下载块缩成一次调用。
+**GitHub API 的 JSON 仍然走 `fetch`** —— 它很小，而且 403 配额可读化的修复就在那条路径上，
+没有理由动它。`Readable` 的 import 随之删掉（`Readable.fromWeb` 是它唯一的用处）。
+
+### 3. 真机验证
+
+对真实 `browser_download_url` 拉完整 543 MB：
+
+```
+修复前（fetch）      : 543.3 MB in 70.48 s ->  7.7 MB/s
+修复后（node:https） : 543.3 MB in  9.14 s -> 59.4 MB/s   （5 秒窗口峰值 56.7 MB/s）
+落盘 569649598 bytes = release 里的 asset.size              -> SIZE OK
+```
+
+快 7.7 倍，字节数完全一致。
+
+### 4. 探针要重写，不能放宽
+
+下载改走 `node:https` 之后，原来的 `probe-github-install.mjs` 立刻红了
+（`install 状态一直没有停下`）：它用 `globalThis.fetch` 桩喂下载，而下载已经不经过
+fetch 了，桩里那个假 URL 被真的拿去请求，安装状态永远不结束。**这正是修复生效的证据**，
+所以不能把它「改回能过」。改成用本机 `node:http` 服务器（8 MB 载荷 + sha256）验下载层，
+新增 6 条断言：跟随 302、与源逐字节一致、`onBytes` 是流式回调（实测 129 次）、
+404 报下载层错误而不是留个空文件、重定向环有上限、以及**把 `globalThis.fetch` 换成会抛错的桩
+之后下载仍必须完成**（这条是本次修复的本体）。release 形状里加了一个 `.zip.sha256` 诱饵 ——
+真实 release 里就有这种资产，选资产的 `find` 必须跳过它。20 → 26 条，全绿。
+
+### 5. 全套复跑
+
+`verify-load` / `probe-v4-routes 16/16` / `probe-availability` / `probe-client-apply 34/34` /
+`probe-contrast 27/27` / `probe-skill-registry 10/10` / `probe-github-install 26/26`。
+README 的验收清单同步为 26/26，「下载安装」一节写明为什么刻意不用 `fetch`。
