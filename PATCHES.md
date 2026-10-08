@@ -669,3 +669,74 @@ node exit-test.mjs read    # 新进程读回 → 必须 PERSISTED=true
 
 **教训**：文档里贴真实命令输出时，home 路径、用户名、主机名都要先脱敏再落盘。这类内容
 一旦跟着版本号发到 npm 就**改不掉**了 —— 只能发新版本覆盖，旧版本只能下架或弃用。
+
+## 0.11.2 — 界面可访问性、对比度探针的 alpha 漏洞，以及清理 9 千行脚本残骸
+
+一轮 `/audit`（前端质量：可访问性 / 性能 / 主题 / 响应式 / 反模式）+ `/ponytail-audit`
+（全仓过度设计清理）之后的改动。两轮报告见提交信息与 `README.md` 的验收脚本清单。
+
+### 1. 界面（`client.js`，唯一的前端面）
+
+- **小节标题原本是 `<p>`**。"Status" / "Health check" / "Config" 三个标题只是长得像标题，
+  读屏软件拿不到大纲，无法按标题跳转。改成 `<h4>`（卡片标题仍是 `<h3>`），视觉零变化。
+- **13 个按钮都没有 `type`**。HTML 里按钮的默认 type 是 `submit` —— 一旦这个卡片被放进宿主的
+  任何 `<form>`（设置页完全可能），点一下就会连带提交表单、刷新页面。全部显式加 `type="button"`。
+- **对话框在矮视口下按钮点不到**。`maxHeight: 80vh` 约束的是盒子而不是内容，内容会溢出到圆角
+  边框外面且没有滚动条，于是 "Use this folder"/"Cancel" 不可达（横屏手机、被压扁的窗口）。
+  改成外层 `overflow: hidden` + 内层 `minHeight: 0; overflowY: auto`。
+- **删掉两处死代码**：Download 按钮上一个两个分支返回同一值的三元表达式；以及注册项里
+  `inject: () => face` 那份没人读的 `face` 对象（组件早已改成只用闭包动作）。
+  宿主渲染器的 `runInject` 首行就是 `if (!inject) return EMPTY_INJECTED_PROPS`，
+  「没有 inject」是受支持的分支，不是异常路径。
+
+### 2. 对比度探针（`probe-contrast.mjs`）—— 一个会让所有 alpha 回归静默通过的 bug
+
+`resolve()` 的末尾是 `return v.length === 9 ? v.slice(0, 7) : v`：8 位十六进制
+`#RRGGBBAA` 被截成 `#RRGGBB`，**alpha 字节直接丢掉**。宿主大量使用带 alpha 的 token
+（`--dsw-alias-border-l2 = #0000001a`、`border-l3 = #0000001f`、`border-l4 = #00000029`），
+于是 10% 的黑色被当成纯黑，算出 **21.00:1** —— 任何基于 alpha 的对比度回归都会静默通过。
+
+现在颜色一律以 `[r,g,b,a]` 传递，算对比度前先按 alpha 合成到背景上；`color-mix` 也改成
+先预乘再除（两个半透明色直接插值会把 rgb 混错）。同时补上 3 组原本根本没测的组合：
+override 徽标（brand-primary）、文件夹图标（menu-icon）、输入框文字（label-primary on layer-3）。
+断言数 21 → 27。
+
+**一个不修的发现**：WCAG 1.4.11 要求控件边界 ≥3:1，但宿主最强的边框 token 合成后只有
+1.45:1（浅色）/ 1.91:1（深色），而且浅色下 `bg-layer-1/2/3` 与 `bg-base` **全是 `#ffffff`**，
+输入框的填充与卡片完全无法区分（1.00:1）。这不是本插件能单方面修的：把边框改成 label 级
+颜色会让插件长得不像宿主，那是更严重的问题。因此探针只**测量并打印**这一段（`info` 行，
+不计入断言）—— 断言一个宿主注定达不到的目标，只会逼后来者把探针改松。
+
+### 3. 清理（`/ponytail-audit`）
+
+删除 19 个**零引用**的移植期脚本残骸，共 279 KB / 9,253 行：
+
+```
+tx-probe  timing-test  rw-save-test  readwrite-test  probe2  persist-test  ioc-probe
+probe  bisect-save  volume-test  probe3  probe3b  probe3c  probe3d  probe4
+extract-upstream-tools.py  endpoints.json  UPSTREAM-TOOLS.json  UPSTREAM-TREE.txt
+```
+
+判定方式是逐文件 `git grep -l` 反查引用方：前 11 个没有任何文件引用；
+`readwrite-test` 只被 `rw-save-test` 引用，`probe` 只被 `ioc-probe`/`tx-probe` 引用，
+`UPSTREAM-TOOLS.json` 只被 `extract-upstream-tools.py` 引用（三者自身也在删除集里，
+形成一条整体死掉的链）；`probe3*`/`probe4` 只剩 PATCHES.md 的历史叙述引用
+（本文档保留原样，此处说明它们已删除即可）。这些文件都不在 `package.json` 的 `files`
+白名单里，删掉不影响发布内容。
+
+**保留不删的一个候选项**：`UPSTREAM-SCHEMA-LIVE.json`（233 KB，占解包体积约 1/5）与
+`gen-mcp-tools.mjs` 只被构建期使用，运行时不读，却随包发布。仍然选择保留 —— 它让那 168 个
+生成工具**可被重新生成**；删掉等于发布一个无法随上游 GhidraMCP 升级而重建的黑盒。
+（代价真实存在，属于有意识的取舍，不是遗漏。）
+
+### 4. 回归守卫
+
+`probe-client-apply.mjs` 26 → 30 项，新增 4 条源码级守卫：每个按钮必须带
+`type="button"`（断言 13/13）；三个小节标题必须是 `<h4>` 而非 `<p>`；对话框限高必须
+同时具备 `overflow: hidden` 与内层 `minHeight: 0`/`overflowY: auto`；`face` 注入层
+不得回来。守卫只看真代码（先剥掉整行注释），否则解释「为什么删掉」的注释本身会撞上断言。
+
+**另注**：`probe-contrast.mjs` 的宿主主题文件路径与 `lib/dev-env.mjs` 的导入在 Windows 上
+必须先经 `pathToFileURL()`，否则 Node 会报
+`ERR_UNSUPPORTED_ESM_URL_SCHEME ... Received protocol 'c:'`。
+

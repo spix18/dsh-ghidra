@@ -174,6 +174,20 @@ if (mod && typeof mod.apply === 'function') {
   check('无 props.X || 闭包 死代码兜底', !/props\.[a-zA-Z]+ \|\|/.test(src), '')
   check('状态色走 color-mix 保证对比度', /color-mix\(in srgb, var\(--dsw-alias-state-success-primary\)/.test(src), '')
   check('dialog padding 已移出（遮罩点击区只含真遮罩）', /padding: 0, borderRadius/.test(src), '')
+  // 5) 第四轮（/audit + /ponytail-audit 后）新增守卫 —— 把这一轮修掉的东西钉死，防止悄悄改回去
+  // code = 去掉整行注释后的源码：注释里会提到这些名字（解释为什么删掉），断言必须只看真代码。
+  const code = src.split('\n').map((l) => (l.trim().startsWith('//') ? '' : l)).join('\n')
+  const btnCount = (src.match(/h\('button', \{/g) || []).length
+  const typedCount = (src.match(/h\('button', \{ type: 'button'/g) || []).length
+  check('每个按钮都显式 type="button"（否则落进宿主 <form> 会变成 submit）',
+    btnCount > 0 && btnCount === typedCount, typedCount + '/' + btnCount)
+  check('小节标题是真标题（h4），不是只换样子的 <p>',
+    (code.match(/h\('h4', \{ style: S\.sectionTitle/g) || []).length === 3 &&
+    !/h\('p', \{ style: S\.sectionTitle/.test(code), '')
+  check('dialog 限高真的会出滚动条（overflow hidden + 内层 minHeight:0/overflowY:auto）',
+    /overflow: 'hidden'/.test(code) && /minHeight: 0/.test(code) && /overflowY: 'auto'/.test(code), '')
+  check('已删除没人读的 face 注入层（宿主 runInject 对缺失 inject 是受支持分支）',
+    !/inject: \(\) => face/.test(code) && !/const face = \{/.test(code), '')
 }
 
 console.log('')

@@ -301,10 +301,11 @@ prompt 前缀缓存失效（每次 start/stop 一次），换来的是「模型�
     ├── PATCHES.md              # 相对上游的补丁与踩坑记录（**改代码前先读**）
     ├── gen-mcp-tools.mjs       # REST 桥工具生成器（读 UPSTREAM-SCHEMA-LIVE.json，SKIP 表 58 条）
     ├── UPSTREAM-SCHEMA-LIVE.json / upstream-src/  # 上游 live schema dump 与 55 个 Java 源（移植依据）
-    ├── sync-installed.mjs      # 同步已装副本（20 文件 × 2 profile）
+    ├── sync-installed.mjs      # 同步已装副本（40 文件 × 2 profile，逐文件校验 SHA256）
     ├── verify-load.mjs / verify.mjs / verify-tools.mjs / verify-batch3.mjs / verify-batch4.mjs / verify-mcp-e2e.mjs / fail-test.mjs / exit-test.mjs
     ├── kat-consts.py           # 批次 4 常量表的 KAT（62 条已知答案，脱离 Ghidra 单跑）
-    └── *.mjs                   # 诊断脚本（probe/probe3*/persist/timing/volume/readwrite/bisect/tx-probe/ioc-probe/union-args）
+    └── *.mjs                   # 诊断脚本（probe-contrast / probe-client-apply / probe-v4-routes /
+                                #   probe-in-tree-e2e / probe-unified-e2e / probe-mcp-start / probe-union-args）
 
 ## 验收
 
@@ -316,6 +317,10 @@ prompt 前缀缓存失效（每次 start/stop 一次），换来的是「模型�
     node probe-skill-registry.mjs         # 用真实的 @deepseek-ai/dsh-skill 注册表跑一遍
                                           #   register→list→get→render→dispose     → 10/10
                                           #   （找不到该包时 SKIP 退出 0）
+    node probe-contrast.mjs [dsh] [副本]  # 从宿主主题 CSS 解出 token 真值，对插件真正使用的
+                                          #   11 组前景/背景算对比度（先按 alpha 合成）→ 27/27
+    node probe-client-apply.mjs [副本]    # 浏览器半的契约：注册项/渲染/原生 <dialog>/源码守卫 → 30/30
+    node probe-v4-routes.mjs              # 7 条 HTTP 路由 + doctor 路由逐个实调     → 16/16
     node verify.mjs                       # lib 层：探测→导入→起服务器→op 往返 → 15/15
     node verify-tools.mjs                 # 工具层：批次 1/2 全部实调 + 失败用例 → 85/85
     node verify-batch3.mjs                # 批次 3 的 14 个新工具（含落盘回归）   → 77/77
