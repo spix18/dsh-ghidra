@@ -740,3 +740,51 @@ extract-upstream-tools.py  endpoints.json  UPSTREAM-TOOLS.json  UPSTREAM-TREE.tx
 必须先经 `pathToFileURL()`，否则 Node 会报
 `ERR_UNSUPPORTED_ESM_URL_SCHEME ... Received protocol 'c:'`。
 
+### 5. 第二轮 /audit —— 三个「声明在、效果没了」的 P1
+
+同一棵树上的第二次**只读**审计。分数 17/20 → 16/20。**这不是代码退化了**：第一轮查的是
+「颜色有没有走 token」，这一轮查的是「字号有没有走字阶」—— 结论是一个都没走。
+
+- **触屏 44px 规则从来没有生效过。** `ensureStyle()` 注入的
+  `@media (pointer: coarse){…{min-height:44px}}` 里，三个选择器对应的元素**全都带行内
+  `min-height`**（按钮/输入框 28px、列表行 32px）。行内声明在层叠里高过任何非 `!important`
+  的作者样式，媒体查询不改变优先级 —— 这条规则死了一整个版本，而探针只检查
+  `/min-height:44px/` 这个字符串存在，于是一路 PASS。修法是加 `!important`（这正是它的
+  合法用途），守卫同步改成断言 `min-height:44px!important`。
+  注意 **WCAG 2.5.8 AA（24×24）本来就过**，过不了的是 AAA 2.5.5 与 44pt/48dp 平台惯例。
+- **下载进度百分比永远不显示。** 服务端是齐的（`index.js:145` 有 `bytes`/`total`，
+  `index.js:173` 算 `pct`，`index.js:1497` 一起发出去），客户端却只搬了
+  `running/phase/pct/error/home` 五个字段，而渲染分支的条件正是 `install.total` ——
+  几百 MB 的 Ghidra 下载只显示一个 phase 词，用户分不清「在下载」和「卡住了」。
+- **字号全部硬编码。** `S` 表里 8 种尺寸写死为 `0.875/0.75/0.6875/0.625rem`，行高写死
+  1.6/1.5/1.4，而宿主定义了完整字阶（`--dsw-font-s-14` / `xxs-12` / `xxxs-11`，每个还带
+  `-font-size` / `-line-height`）。两个徽章的 `0.625rem` = 10px 甚至**低于宿主最小档 11px**。
+  现在字号与行高全部换成字阶 token，10px 的两处升到 11px。
+
+**顺手纠正第一轮的一个误报**：当时把「0.5px 与 1px 边框混用」记为问题。实查宿主 ——
+它自己的控件边框就是 `.5px solid var(--dsw-alias-border-l4)`，0.5px 是宿主惯例，不是混用。
+真正的差距在 token（插件用 l3、宿主控件用 l4），已改成 l4：控件边界对比度
+1.32:1 → 1.45:1（浅色）、1.68:1 → 1.91:1（深色）。宽度一律不动。
+
+### 6. 第二轮 /ponytail-audit 与其余修复
+
+- **live region 改成常驻容器**（WCAG 4.1.3）。六处 `role="status"`/`role="alert"` 原本与自己的
+  文本同时插入 DOM —— 读屏只在「已存在的区域内容变化」时才可靠播报，这样插进去往往一声不吭。
+  现在区域无条件渲染、只换里面的文字（空文本高度为 0，视觉无变化）。
+- **`useSnap` 换成 `React.useSyncExternalStore`。** 手写的 subscribe-in-`useEffect` 有一个
+  丢更新窗口（首帧到 effect 之间发生的 store 写入看不到，要等下一次写入才补上），
+  `useSyncExternalStore` 会在订阅后立刻核对一次。测试 stub 没有这个 hook，故保留回退路径。
+- **字段帮助文本从 `title` 挪到 `aria-describedby` + 正文段落。** `title` 只有鼠标悬停够得着，
+  键盘与读屏都拿不到 —— 而这几条帮助恰恰是在说「这么填会失败」，最需要它的人拿不到它。
+- **其余 8 项清理**：删掉 `act` 里从来没人调用的 `refresh`/`stopMcp`；删掉
+  `prefers-reduced-motion` 规则（全文件只有它自己提到 `transition`，即它永远匹配不到任何东西）；
+  `memoize = React.memo || ((c) => c)` 去掉无意义回退；`S.dialog` 去掉单子元素下永不生效的
+  `gap: 10`；去掉 `BrowseDialog` 函数体那对没有作用域意义的裸花括号；11 处零参箭头包装改成
+  直接引用；目录对话框改吃一张 6 成员的窄表 `browseAct`，而不是把 15 成员的袋子整体透传。
+- **对话框只留一个滚动容器**：`S.list` 去掉自带的 `maxHeight: 46vh` + `overflowY: auto`。
+  矮视口下外层 wrapper 与列表两层滚动条会互相嵌套。
+
+`probe-client-apply.mjs` 30 → 34 项。新增的 4 条守卫一律**断言效果、或断言旧写法已消失**，
+而不是断言某个声明字符串存在 —— 这一轮修掉的两个 P1 全是「字符串在、效果没了」，
+和上一轮那个 alpha 截断 bug 属于同一种失败形态。
+

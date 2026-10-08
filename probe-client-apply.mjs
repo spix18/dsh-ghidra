@@ -42,6 +42,7 @@ const React = {
   // 真实 React 时序：effect 在 commit（ref 已挂）之后才跑，所以先入队，由 flushEffects() 统一执行
   useEffect: (fn) => { dom.pending.push(fn) },
   useMemo: (fn) => fn(),
+  useCallback: (fn) => fn,
   useRef: (v) => ({ current: v }),
   memo: (c) => c,
 }
@@ -166,11 +167,18 @@ if (mod && typeof mod.apply === 'function') {
   check('模态用原生 <dialog> 元素', /h\('dialog'/.test(src), '')
   check('模态走 showModal()（原生焦点陷阱/Esc/焦点归还）', /\.showModal\(\)/.test(src), '')
   check('不再手写 Tab 焦点陷阱（回归守卫）', !/e\.key === 'Tab'/.test(src) && !/lastFocusRef/.test(src), '')
-  check('粗指针命中区 44px 规则存在', /pointer: coarse/.test(src) && /min-height:44px/.test(src), '')
+  // !important 是这条规则的全部要害：三类元素都带行内 min-height，行内声明高过任何非 !important
+  // 的作者样式。只断言 min-height:44px 存在时它死了一整个版本还是 PASS —— 断言声明 ≠ 断言效果。
+  check('粗指针命中区 44px 规则真的会生效（!important 压倒行内 min-height）',
+    /pointer: coarse/.test(src) && /min-height:44px!important/.test(src), 'inline min-height wins without !important')
   check('useSnap 支持 selector（细粒度订阅）', /useSnap = \(store, selector\)/.test(src), '')
   check('目录行 memo 比较器忽略回调身份', /React\.memo/.test(src) && /a\.path === b\.path/.test(src), '')
   check('零硬编码颜色（只走 --dsw-alias-* token）', !/#[0-9a-fA-F]{3,8}\b/.test(src) && !/rgba?\(/.test(src), '')
-  check('字号全部 rem（无 px 字号）', !/fontSize: \d/.test(src) && /fontSize: '[0-9.]+rem'/.test(src), '')
+  // 宿主定义了完整的字阶 token（--dsw-font-s-14 / xxs-12 / xxxs-11 …，各自带 -font-size / -line-height），
+  // 硬编码 rem 会绕过它，也会再次掉到 10px（宿主最小档是 11px）。
+  check('字号与行高全部走宿主字阶 token（无硬编码 rem/px）',
+    !/fontSize: \d/.test(src) && !/fontSize: '[0-9.]+(rem|px)'/.test(src) && !/lineHeight: [0-9]/.test(src) &&
+    /fontSize: 'var\(--dsw-font-/.test(src), 'hardcoded sizes bypass the --dsw-font-* scale')
   check('无 props.X || 闭包 死代码兜底', !/props\.[a-zA-Z]+ \|\|/.test(src), '')
   check('状态色走 color-mix 保证对比度', /color-mix\(in srgb, var\(--dsw-alias-state-success-primary\)/.test(src), '')
   check('dialog padding 已移出（遮罩点击区只含真遮罩）', /padding: 0, borderRadius/.test(src), '')
@@ -188,6 +196,22 @@ if (mod && typeof mod.apply === 'function') {
     /overflow: 'hidden'/.test(code) && /minHeight: 0/.test(code) && /overflowY: 'auto'/.test(code), '')
   check('已删除没人读的 face 注入层（宿主 runInject 对缺失 inject 是受支持分支）',
     !/inject: \(\) => face/.test(code) && !/const face = \{/.test(code), '')
+  // 6) 第五轮（第二轮 /audit + /ponytail-audit 后）新增守卫。
+  // 这一轮修掉的两个 P1 都属于「声明在、效果没了」这一类，所以守卫一律断言效果或断言旧写法已消失。
+  check('下载进度字段真的被搬进客户端（bytes/total，否则百分比分支永不进入）',
+    /installStore\.update\(\{[^}]*bytes: ins\.bytes[^}]*total: ins\.total/.test(code) &&
+    /installStore = createSnap\(\{[^}]*bytes: 0[^}]*total: 0/.test(code), 'progress is gated on install.total')
+  check('live region 常驻：不再随文本一起条件插入（读屏会漏播报，WCAG 4.1.3）',
+    !/form\.message \? h\('span'/.test(code) && !/form\.failed \? h\('span'/.test(code) &&
+    !/browse\.error \? h\('p'/.test(code) && !/browse\.message \? h\('p'/.test(code) &&
+    !/if \(doctor && doctor\.error\) children\.push/.test(code) &&
+    !/if \(install && \(install\.running/.test(code), 'conditional live regions')
+  check('帮助文本走 aria-describedby（title 只有鼠标够得着，读屏拿不到）',
+    /fieldId \+ '-help'/.test(code) && /style: S\.fieldHelp/.test(code) &&
+    /'aria-describedby': \[bad \? fieldId \+ '-err'/.test(code), 'help is still title-only')
+  check('目录对话框拿到的是窄动作表（browseAct），不是 15 成员的袋子',
+    /const browseAct = \{/.test(code) && /act: browseAct/.test(code) &&
+    !/refresh: refreshStatus,/.test(code), 'the dialog still gets the whole bag')
 }
 
 console.log('')

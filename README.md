@@ -319,7 +319,7 @@ prompt 前缀缓存失效（每次 start/stop 一次），换来的是「模型�
                                           #   （找不到该包时 SKIP 退出 0）
     node probe-contrast.mjs [dsh] [副本]  # 从宿主主题 CSS 解出 token 真值，对插件真正使用的
                                           #   11 组前景/背景算对比度（先按 alpha 合成）→ 27/27
-    node probe-client-apply.mjs [副本]    # 浏览器半的契约：注册项/渲染/原生 <dialog>/源码守卫 → 30/30
+    node probe-client-apply.mjs [副本]    # 浏览器半的契约：注册项/渲染/原生 <dialog>/源码守卫 → 34/34
     node probe-v4-routes.mjs              # 7 条 HTTP 路由 + doctor 路由逐个实调     → 16/16
     node verify.mjs                       # lib 层：探测→导入→起服务器→op 往返 → 15/15
     node verify-tools.mjs                 # 工具层：批次 1/2 全部实调 + 失败用例 → 85/85

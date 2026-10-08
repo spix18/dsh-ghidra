@@ -83,7 +83,7 @@ window.__ModuleLoader__.load({
     const statusStore = createSnap({ loading: true, error: '', status: null })
     const formStore = createSnap({ ready: false, unavailable: false, snapshot: null, drafts: {}, invalid: {}, saving: false, failed: false, message: '', error: '' })
     const doctorStore = createSnap({ running: false, result: null, error: '' })
-    const installStore = createSnap({ running: false, phase: '', pct: 0, error: '', home: null })
+    const installStore = createSnap({ running: false, phase: '', pct: 0, bytes: 0, total: 0, error: '', home: null })
     // 应用内文件夹浏览器（原生对话框在部分环境不可见，改由插件自己渲染）
     const browseStore = createSnap({ open: false, field: null, path: '', parent: null, dirs: [], drives: [], error: '', busy: false, newName: '', dotSegment: null, message: '' })
 
@@ -226,7 +226,9 @@ window.__ModuleLoader__.load({
           await new Promise((res) => setTimeout(res, 1000))
           const s = await fetch('/api/dsh-ghidra/status', { method: 'GET' }).then((x) => x.json()).catch(() => null)
           const ins = s && s.install
-          if (ins) installStore.update({ running: !!ins.running, phase: ins.phase || '', pct: ins.pct || 0, error: ins.error || '', home: ins.home || null })
+          // bytes / total 必须一起搬过来：下面进度条的分支以 install.total 为条件，
+          // 少搬这两个字段，几百 MB 的下载就只剩一个 phase 词，百分比永远不出现。
+          if (ins) installStore.update({ running: !!ins.running, phase: ins.phase || '', pct: ins.pct || 0, bytes: ins.bytes || 0, total: ins.total || 0, error: ins.error || '', home: ins.home || null })
           if (!ins || !ins.running) {
             if (ins && ins.phase === 'done' && ins.home) {
               edit('ghidraHome', ins.home)
@@ -378,9 +380,11 @@ window.__ModuleLoader__.load({
           '.dshg-row:focus-visible{background:var(--dsw-alias-interactive-bg-hover)}',
           // 原生模态的遮罩走 top-layer 伪元素（不再需要自绘 overlay div）
           '.dshg-dialog::backdrop{background:var(--dsw-alias-bg-mask-1)}',
-          // 触屏/粗指针：把控件抬到 44px 命中区（鼠标环境保持宿主的 28px 紧凑密度）
-          '@media (pointer: coarse){.dshg-btn,.dshg-input,.dshg-row{min-height:44px}}',
-          '@media (prefers-reduced-motion: reduce){.dshg-btn,.dshg-row{transition:none}}',
+          // 触屏/粗指针：把控件抬到 44px 命中区（鼠标环境保持宿主的 28px 紧凑密度）。
+          // !important 在这里是必需的，不是偷懒：三类元素全都带行内 min-height，而行内声明在层叠里
+          // 高过任何非 !important 的作者样式（媒体查询不改变优先级）。少了它这条规则就是死的
+          // ——它曾经死了一整个版本，而探针只检查字符串存在，于是一路 PASS。
+          '@media (pointer: coarse){.dshg-btn,.dshg-input,.dshg-row{min-height:44px!important}}',
         ].join('')
         document.head.appendChild(el)
       } catch { /* 无 DOM 时忽略（测试环境） */ }
@@ -389,35 +393,37 @@ window.__ModuleLoader__.load({
     const S = {
       card: { border: '1px solid var(--dsw-alias-border-l2)', background: 'var(--dsw-alias-bg-layer-2)', borderRadius: 'var(--dsw-radius-md)', padding: '14px 16px', display: 'flex', flexDirection: 'column', gap: 12 },
       head: { display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' },
-      title: { fontSize: '0.875rem', fontWeight: 600, color: 'var(--dsw-alias-label-primary)', margin: 0 },
-      badge: { fontSize: '0.6875rem', padding: '1px 7px', borderRadius: 999, border: '1px solid var(--dsw-alias-border-l2)', color: 'var(--dsw-alias-label-secondary)', background: 'var(--dsw-alias-bg-layer-3)' },
-      sectionTitle: { fontSize: '0.6875rem', fontWeight: 600, letterSpacing: '0.06em', color: 'var(--dsw-alias-label-secondary)', margin: '2px 0 0' },
-      row: { display: 'flex', gap: 8, fontSize: '0.75rem', color: 'var(--dsw-alias-label-secondary)', lineHeight: 1.6 },
+      title: { fontSize: 'var(--dsw-font-s-14-font-size)', fontWeight: 600, color: 'var(--dsw-alias-label-primary)', margin: 0 },
+      badge: { fontSize: 'var(--dsw-font-xxxs-11-font-size)', padding: '1px 7px', borderRadius: 999, border: '1px solid var(--dsw-alias-border-l2)', color: 'var(--dsw-alias-label-secondary)', background: 'var(--dsw-alias-bg-layer-3)' },
+      sectionTitle: { fontSize: 'var(--dsw-font-xxxs-11-font-size)', fontWeight: 600, letterSpacing: '0.06em', color: 'var(--dsw-alias-label-secondary)', margin: '2px 0 0' },
+      row: { display: 'flex', gap: 8, fontSize: 'var(--dsw-font-xxs-12-font-size)', color: 'var(--dsw-alias-label-secondary)', lineHeight: 'var(--dsw-font-xxs-12-line-height)' },
       key: { color: 'var(--dsw-alias-label-secondary)', minWidth: 110, flexShrink: 0 },
       val: { color: 'var(--dsw-alias-label-primary)', wordBreak: 'break-all' },
-      ok: { color: 'color-mix(in srgb, var(--dsw-alias-state-success-primary) 55%, var(--dsw-alias-label-primary))', fontSize: '0.75rem' },
-      err: { color: 'color-mix(in srgb, var(--dsw-alias-state-error-primary) 75%, var(--dsw-alias-label-primary))', fontSize: '0.75rem', wordBreak: 'break-all' },
-      idle: { color: 'color-mix(in srgb, var(--dsw-alias-state-idle-primary) 40%, var(--dsw-alias-label-primary))', fontSize: '0.75rem' },
-      hint: { fontSize: '0.75rem', color: 'var(--dsw-alias-label-secondary)', margin: 0, lineHeight: 1.5 },
-      caption: { fontSize: '0.6875rem', color: 'var(--dsw-alias-label-secondary)', margin: 0, lineHeight: 1.4 },
+      ok: { color: 'color-mix(in srgb, var(--dsw-alias-state-success-primary) 55%, var(--dsw-alias-label-primary))', fontSize: 'var(--dsw-font-xxs-12-font-size)' },
+      err: { color: 'color-mix(in srgb, var(--dsw-alias-state-error-primary) 75%, var(--dsw-alias-label-primary))', fontSize: 'var(--dsw-font-xxs-12-font-size)', wordBreak: 'break-all' },
+      idle: { color: 'color-mix(in srgb, var(--dsw-alias-state-idle-primary) 40%, var(--dsw-alias-label-primary))', fontSize: 'var(--dsw-font-xxs-12-font-size)' },
+      hint: { fontSize: 'var(--dsw-font-xxs-12-font-size)', color: 'var(--dsw-alias-label-secondary)', margin: 0, lineHeight: 'var(--dsw-font-xxs-12-line-height)' },
+      caption: { fontSize: 'var(--dsw-font-xxxs-11-font-size)', color: 'var(--dsw-alias-label-secondary)', margin: 0, lineHeight: 'var(--dsw-font-xxxs-11-line-height)' },
       buttonRow: { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' },
-      button: { fontSize: '0.75rem', minHeight: 28, padding: '0 12px', borderRadius: 'var(--dsw-radius-sm)', border: '0.5px solid var(--dsw-alias-border-l3)', background: 'transparent', color: 'var(--dsw-alias-label-primary)', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 4 },
-      buttonPrimary: { fontSize: '0.75rem', minHeight: 28, padding: '0 12px', borderRadius: 'var(--dsw-radius-sm)', border: 'none', background: 'var(--dsw-alias-button-primary-fill)', color: 'var(--dsw-alias-label-primary-foreground)', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 4 },
-      input: { fontSize: '0.75rem', minHeight: 28, padding: '0 8px', borderRadius: 'var(--dsw-radius-sm)', border: '0.5px solid var(--dsw-alias-border-l3)', background: 'var(--dsw-alias-bg-layer-3)', color: 'var(--dsw-alias-label-primary)', flex: 1, minWidth: 140 },
-      inputInvalid: { fontSize: '0.75rem', minHeight: 28, padding: '0 8px', borderRadius: 'var(--dsw-radius-sm)', border: '0.5px solid var(--dsw-alias-state-error-primary)', background: 'var(--dsw-alias-bg-layer-3)', color: 'var(--dsw-alias-label-primary)', flex: 1, minWidth: 140 },
+      button: { fontSize: 'var(--dsw-font-xxs-12-font-size)', minHeight: 28, padding: '0 12px', borderRadius: 'var(--dsw-radius-sm)', border: '0.5px solid var(--dsw-alias-border-l4)', background: 'transparent', color: 'var(--dsw-alias-label-primary)', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 4 },
+      buttonPrimary: { fontSize: 'var(--dsw-font-xxs-12-font-size)', minHeight: 28, padding: '0 12px', borderRadius: 'var(--dsw-radius-sm)', border: 'none', background: 'var(--dsw-alias-button-primary-fill)', color: 'var(--dsw-alias-label-primary-foreground)', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 4 },
+      input: { fontSize: 'var(--dsw-font-xxs-12-font-size)', minHeight: 28, padding: '0 8px', borderRadius: 'var(--dsw-radius-sm)', border: '0.5px solid var(--dsw-alias-border-l4)', background: 'var(--dsw-alias-bg-layer-3)', color: 'var(--dsw-alias-label-primary)', flex: 1, minWidth: 140 },
+      inputInvalid: { fontSize: 'var(--dsw-font-xxs-12-font-size)', minHeight: 28, padding: '0 8px', borderRadius: 'var(--dsw-radius-sm)', border: '0.5px solid var(--dsw-alias-state-error-primary)', background: 'var(--dsw-alias-bg-layer-3)', color: 'var(--dsw-alias-label-primary)', flex: 1, minWidth: 140 },
       fieldRow: { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' },
-      fieldLabel: { fontSize: '0.75rem', color: 'var(--dsw-alias-label-secondary)', minWidth: 150, flexShrink: 0 },
-      fieldError: { fontSize: '0.6875rem', color: 'color-mix(in srgb, var(--dsw-alias-state-error-primary) 75%, var(--dsw-alias-label-primary))', flexBasis: '100%', margin: 0 },
-      overrideBadge: { fontSize: '0.625rem', padding: '0 6px', borderRadius: 999, border: '1px solid var(--dsw-alias-brand-primary)', color: 'var(--dsw-alias-brand-primary)', flexShrink: 0 },
+      fieldLabel: { fontSize: 'var(--dsw-font-xxs-12-font-size)', color: 'var(--dsw-alias-label-secondary)', minWidth: 150, flexShrink: 0 },
+      fieldError: { fontSize: 'var(--dsw-font-xxxs-11-font-size)', color: 'color-mix(in srgb, var(--dsw-alias-state-error-primary) 75%, var(--dsw-alias-label-primary))', flexBasis: '100%', margin: 0 },
+      fieldHelp: { fontSize: 'var(--dsw-font-xxxs-11-font-size)', color: 'var(--dsw-alias-label-secondary)', lineHeight: 'var(--dsw-font-xxxs-11-line-height)', flexBasis: '100%', margin: 0 },
+      overrideBadge: { fontSize: 'var(--dsw-font-xxxs-11-font-size)', padding: '0 6px', borderRadius: 999, border: '1px solid var(--dsw-alias-brand-primary)', color: 'var(--dsw-alias-brand-primary)', flexShrink: 0 },
       // 原生 <dialog> + showModal()：top-layer 堆叠、焦点陷阱、Esc 关闭、焦点归还全由浏览器负责
       // overflow:hidden 是必需的：max-height 只约束盒子，不约束内容——不剪裁的话，矮视口
       //（横屏手机、被压扁的窗口）里内容会溢出圆角边框之外，且滚动条落在对话框外面。
       // 真正的滚动交给内层 wrapper（见 BrowseDialog），这样标题和按钮行保持常驻。
-      dialog: { width: 620, maxWidth: '92vw', maxHeight: '80vh', margin: 'auto', padding: 0, borderRadius: 'var(--dsw-radius-md)', border: '1px solid var(--dsw-alias-border-l2)', background: 'var(--dsw-alias-bg-layer-2)', color: 'var(--dsw-alias-label-primary)', display: 'flex', flexDirection: 'column', gap: 10, overflow: 'hidden' },
-      crumb: { fontSize: '0.75rem', color: 'var(--dsw-alias-label-secondary)', wordBreak: 'break-all', flex: 1, minWidth: 120 },
-      list: { display: 'flex', flexDirection: 'column', gap: 2, overflowY: 'auto', maxHeight: '46vh', border: '1px solid var(--dsw-alias-border-l2)', borderRadius: 'var(--dsw-radius-sm)', padding: 6, background: 'var(--dsw-alias-bg-layer-3)' },
-      listRow: { display: 'flex', alignItems: 'center', gap: 8, minHeight: 32, padding: '0 8px', borderRadius: 'var(--dsw-radius-sm)', cursor: 'pointer', fontSize: '0.75rem', color: 'var(--dsw-alias-label-primary)', background: 'transparent', border: 'none', textAlign: 'left', width: '100%' },
-      dotBadge: { fontSize: '0.625rem', padding: '0 5px', borderRadius: 999, border: '1px solid color-mix(in srgb, var(--dsw-alias-state-warn-primary) 70%, var(--dsw-alias-label-primary))', color: 'color-mix(in srgb, var(--dsw-alias-state-warn-label) 70%, var(--dsw-alias-label-primary))', flexShrink: 0 },
+      dialog: { width: 620, maxWidth: '92vw', maxHeight: '80vh', margin: 'auto', padding: 0, borderRadius: 'var(--dsw-radius-md)', border: '1px solid var(--dsw-alias-border-l2)', background: 'var(--dsw-alias-bg-layer-2)', color: 'var(--dsw-alias-label-primary)', display: 'flex', flexDirection: 'column', overflow: 'hidden' },
+      crumb: { fontSize: 'var(--dsw-font-xxs-12-font-size)', color: 'var(--dsw-alias-label-secondary)', wordBreak: 'break-all', flex: 1, minWidth: 120 },
+      // 不自带滚动：滚动容器只留一个（对话框内层 wrapper）。两层滚动条在矮视口下会互相嵌套。
+      list: { display: 'flex', flexDirection: 'column', gap: 2, border: '1px solid var(--dsw-alias-border-l2)', borderRadius: 'var(--dsw-radius-sm)', padding: 6, background: 'var(--dsw-alias-bg-layer-3)' },
+      listRow: { display: 'flex', alignItems: 'center', gap: 8, minHeight: 32, padding: '0 8px', borderRadius: 'var(--dsw-radius-sm)', cursor: 'pointer', fontSize: 'var(--dsw-font-xxs-12-font-size)', color: 'var(--dsw-alias-label-primary)', background: 'transparent', border: 'none', textAlign: 'left', width: '100%' },
+      dotBadge: { fontSize: 'var(--dsw-font-xxxs-11-font-size)', padding: '0 5px', borderRadius: 999, border: '1px solid color-mix(in srgb, var(--dsw-alias-state-warn-primary) 70%, var(--dsw-alias-label-primary))', color: 'color-mix(in srgb, var(--dsw-alias-state-warn-label) 70%, var(--dsw-alias-label-primary))', flexShrink: 0 },
       icon: { flexShrink: 0, color: 'var(--dsw-alias-menu-icon)' },
     }
 
@@ -429,7 +435,7 @@ window.__ModuleLoader__.load({
 
     // 目录行：memo + 自定义比较器（只比数据，不比回调身份）——
     // 过滤框每敲一个字都重渲染整张列表时，只有真正变化的行会重画。
-    const memoize = React.memo || ((c) => c)
+    const memoize = React.memo
     const FolderRow = memoize(function FolderRow(props) {
       return h('button', { type: 'button',
         className: 'dshg-row',
@@ -447,16 +453,25 @@ window.__ModuleLoader__.load({
 
     // React 原生响应式兜底：订阅 snapshot store（无 hooks 仓 props 时分区仍实时刷新）
     // selector 可选：只订阅需要的切片，切片没变就不触发重渲染（细粒度订阅）
+    //
+    // useSyncExternalStore 是 React 为「订阅外部 store」提供的标准 API。手写的
+    // subscribe-in-useEffect 版本有一个丢更新的窗口：订阅建立之前发生的 store 写入不会被看到
+    // （首帧到 effect 之间），要等下一次写入才补上。useSyncExternalStore 在订阅后会立刻核对一次。
+    // 测试 stub 没有这个 hook，所以保留一条回退路径（hook 序列在任一环境内是稳定的）。
     const useSnap = (store, selector) => {
       const sel = selector || ((s) => s)
-      const [snap, setSnap] = React.useState(() => sel(store.getSnapshot()))
+      // useCallback/useState/useEffect 从 React 16.8 起就有，直接用；
+      // useSyncExternalStore 是 React 18 才引入的，而这个插件用的是宿主的 React、自身不锁定版本，
+      // 所以只有它保留一条回退路径（hook 序列在任一环境内都是稳定的）。
+      const subscribe = React.useCallback((onChange) => store.subscribe(onChange), [store])
+      const getSnapshot = React.useCallback(() => sel(store.getSnapshot()), [store, sel])
+      if (React.useSyncExternalStore) return React.useSyncExternalStore(subscribe, getSnapshot)
+      const [snap, setSnap] = React.useState(getSnapshot)
       React.useEffect(() => {
-        const off = store.subscribe(() => {
-          const next = sel(store.getSnapshot())
-          setSnap((prev) => (Object.is(prev, next) ? prev : next))
-        })
+        setSnap(getSnapshot())
+        const off = store.subscribe(() => setSnap(getSnapshot()))
         return () => { try { off() } catch {} }
-      }, [])
+      }, [store])
       return snap
     }
 
@@ -480,17 +495,19 @@ window.__ModuleLoader__.load({
       // `if (!inject) return EMPTY_INJECTED_PROPS`：没有 inject 是受支持的分支。既然组件只用
       // 这里的闭包动作，注册项那边就不再挂一个没人读的 inject（见 apply() 末尾）。
       // 历史上「props 优先、闭包兜底」的双路写法已删除。
+      // 卡片自己用的动作。目录对话框拿的是另一张更窄的表（browseAct）——原来这里是一个 15 成员的
+      // 袋子整体透传下去，其中 refresh / stopMcp 从来没有人通过它调用过（卡片直接调的是闭包）。
       const act = {
-        refresh: refreshStatus,
         save,
         discard,
         edit,
         resetField,
-        stopMcp,
         runDoctor,
         installGhidra,
         openBrowser,
-        browseInto: (p) => { loadDir(p) },
+      }
+      const browseAct = {
+        browseInto: loadDir,
         browseUp,
         browseName: (v) => { browseStore.update({ newName: v }) },
         chooseFolder,
@@ -533,29 +550,30 @@ window.__ModuleLoader__.load({
         if (st.ghidraHome) children.push(h(Row, { key: 'st-home', k: 'Ghidra home', v: st.ghidraHome }))
       }
       children.push(h('div', { style: S.buttonRow, key: 'st-btns' },
-        h('button', { type: 'button', className: 'dshg-btn', style: S.button, onClick: () => { refreshStatus() } }, status && status.loading ? 'Refreshing…' : 'Refresh'),
+        h('button', { type: 'button', className: 'dshg-btn', style: S.button, onClick: refreshStatus }, status && status.loading ? 'Refreshing…' : 'Refresh'),
         mcp && mcp.running
-          ? h('button', { type: 'button', className: 'dshg-btn', style: S.button, onClick: () => { stopMcp() }, title: 'Gracefully stop the upstream GhidraMCP server (saves loaded programs before exit)' }, 'Stop MCP server')
+          ? h('button', { type: 'button', className: 'dshg-btn', style: S.button, onClick: stopMcp, title: 'Gracefully stop the upstream GhidraMCP server (saves loaded programs before exit)' }, 'Stop MCP server')
           : null,
         h('button', { type: 'button',
           className: 'dshg-btn',
           style: S.button,
-          onClick: () => { act.installGhidra() },
+          onClick: act.installGhidra,
           disabled: !!(install && install.running),
           title: 'Download the latest Ghidra release from GitHub, extract it next to the current home and switch the home to it (the old home is deleted)',
         }, install && install.running ? 'Downloading…' : 'Download Ghidra'),
       ))
-      if (install && (install.running || install.phase || install.error || install.home)) {
-        children.push(h('p', { style: install.error ? S.err : S.hint, key: 'st-install', role: install.error ? 'alert' : 'status', 'aria-busy': install.running ? 'true' : undefined },
-          install.running
-            ? (install.phase || 'working…') + (install.total ? ' · ' + install.pct + '% (' + Math.round(install.bytes / 1048576) + '/' + Math.round(install.total / 1048576) + ' MB)' : '')
-            : install.error
-              ? 'Install failed: ' + install.error
-              : install.home
-                ? 'Installed → ' + install.home
-                : install.phase,
-        ))
-      }
+      // 常驻 live region：读屏只在「已存在的区域内容变了」时才可靠播报，把 role 和文本同时插进
+      // DOM 往往一声不吭（WCAG 4.1.3）。所以区域无条件渲染，只换里面的文字；空文本高度为 0。
+      children.push(h('p', { style: S.hint, key: 'st-install', role: 'status', 'aria-busy': install && install.running ? 'true' : undefined },
+        install && install.running
+          ? (install.phase || 'working…') + (install.total ? ' · ' + install.pct + '% (' + Math.round(install.bytes / 1048576) + '/' + Math.round(install.total / 1048576) + ' MB)' : '')
+          : install && !install.error && install.home
+            ? 'Installed → ' + install.home
+            : (install && !install.error && install.phase) || '',
+      ))
+      children.push(h('p', { style: S.err, key: 'st-install-err', role: 'alert' },
+        install && install.error ? 'Install failed: ' + install.error : '',
+      ))
 
       // ---- doctor：健康检查 ----
       children.push(h('div', { style: S.buttonRow, key: 'doc-head' },
@@ -563,19 +581,21 @@ window.__ModuleLoader__.load({
         h('button', { type: 'button',
           className: 'dshg-btn',
           style: S.button,
-          onClick: () => { act.runDoctor() },
+          onClick: act.runDoctor,
           disabled: !!(doctor && doctor.running),
           title: 'Check Ghidra install, launcher scripts, Python and both servers',
         }, doctor && doctor.running ? 'Checking…' : 'Run doctor'),
       ))
-      if (doctor && doctor.error) children.push(h('p', { style: S.err, key: 'doc-err', role: 'alert' }, doctor.error))
-      if (doctor && doctor.result && doctor.result.checks) {
-        const dr = doctor.result
-        children.push(h('p', { style: dr.ok ? S.ok : S.err, key: 'doc-sum', role: 'status' },
-          dr.ok
+      children.push(h('p', { style: S.err, key: 'doc-err', role: 'alert' }, (doctor && doctor.error) || ''))
+      const dr = (doctor && doctor.result && doctor.result.checks) ? doctor.result : null
+      children.push(h('p', { style: dr && !dr.ok ? S.err : S.ok, key: 'doc-sum', role: 'status' },
+        dr
+          ? (dr.ok
             ? 'All essential checks passed (' + dr.essentialOk + '/' + dr.essentialTotal + ')' + (dr.runtimeIdle ? ' · ' + dr.runtimeIdle + ' runtime check(s) idle' : '')
-            : 'Essential checks: ' + dr.essentialOk + '/' + dr.essentialTotal + ' passed',
-        ))
+            : 'Essential checks: ' + dr.essentialOk + '/' + dr.essentialTotal + ' passed')
+          : '',
+      ))
+      if (dr) {
         const docRows = doctor.result.checks.map((c, i) => {
           const label = c.ok ? 'OK' : (c.optional ? 'IDLE' : 'FAIL')
           const style = c.ok ? S.ok : (c.optional ? S.idle : S.err)
@@ -621,7 +641,9 @@ window.__ModuleLoader__.load({
               value: draft,
               title: bad || f.help || '',
               'aria-invalid': bad ? 'true' : undefined,
-              'aria-describedby': bad ? fieldId + '-err' : undefined,
+              // 帮助文本不能只挂在 title 上：title 只有鼠标悬停看得到，键盘与读屏都拿不到，
+              // 而这几条帮助恰恰是在说「这么填会失败」。改成 aria-describedby 指向正文里的段落。
+              'aria-describedby': [bad ? fieldId + '-err' : null, f.help ? fieldId + '-help' : null].filter(Boolean).join(' ') || undefined,
               onChange: (e) => { act.edit(f.field, (e && e.target && e.target.value) || '') },
             }),
             overridden ? h('span', { style: S.overrideBadge }, 'overridden') : null,
@@ -641,6 +663,7 @@ window.__ModuleLoader__.load({
                 'aria-label': 'Reset ' + f.label + ' to default',
               }, 'Reset')
               : null,
+            f.help ? h('p', { id: fieldId + '-help', style: S.fieldHelp, key: fieldId + '-help' }, f.help) : null,
             bad ? h('p', { id: fieldId + '-err', style: S.fieldError, key: fieldId + '-err' }, bad) : null,
           ))
         })
@@ -649,16 +672,17 @@ window.__ModuleLoader__.load({
             className: form.saving ? 'dshg-btn' : 'dshg-btn dshg-primary',
             style: form.saving ? S.button : S.buttonPrimary,
             disabled: !!form.saving,
-            onClick: () => { act.save() },
+            onClick: act.save,
           }, form.saving ? 'Saving…' : 'Save'),
-          h('button', { type: 'button', className: 'dshg-btn', style: S.button, onClick: () => { act.discard() } }, 'Discard'),
-          form.message ? h('span', { style: S.ok, role: 'status' }, form.message) : null,
-          form.failed ? h('span', { style: S.err, role: 'alert' }, form.error || 'Save failed') : null,
+          h('button', { type: 'button', className: 'dshg-btn', style: S.button, onClick: act.discard }, 'Discard'),
+          // 常驻 live region（同上）：文本来了才插入的 region 读屏经常不播报。
+          h('span', { style: S.ok, role: 'status' }, form.message || ''),
+          h('span', { style: S.err, role: 'alert' }, form.failed ? (form.error || 'Save failed') : ''),
         ))
       }
 
       // ---- 文件夹浏览器：独立组件 + 细粒度订阅（见 BrowseDialog 定义）----
-      children.push(browseOpen ? h(BrowseDialog, { key: 'browse', act }) : null)
+      children.push(browseOpen ? h(BrowseDialog, { key: 'browse', act: browseAct }) : null)
 
       return h('div', { style: S.card }, ...children)
     }
@@ -676,93 +700,92 @@ window.__ModuleLoader__.load({
         try { if (el && el.showModal) el.showModal() } catch { /* ignore */ }
         return () => { try { if (el && el.open && el.close) el.close() } catch { /* ignore */ } }
       }, [])
-      {
-        const all = browse.path
-          ? (browse.dirs || [])
-          : (browse.drives || []).map((d) => ({ name: d, path: d, dot: false }))
-        const q = String(folderFilter || '').trim().toLowerCase()
-        const filtered = q ? all.filter((d) => String(d.name).toLowerCase().includes(q)) : all
-        const CAP = 150
-        const entries = filtered.slice(0, CAP)
-        const rows = []
-        if (browse.path) {
-          rows.push(h('button', { type: 'button',
-            key: 'up', className: 'dshg-row', style: S.listRow,
-            onClick: () => act.browseUp(),
-            'aria-label': 'Go up to ' + (browse.parent || 'the drive list'),
-          }, h(IconUp), h('span', null, '..  ' + (browse.parent || 'Drives'))))
-        }
-        for (const d of entries) {
-          rows.push(h(FolderRow, {
-            key: d.path,
-            path: d.path,
-            name: d.name,
-            dot: d.dot,
-            onOpen: act.browseInto,
-          }))
-        }
-        if (!entries.length) {
-          rows.push(h('p', { key: 'empty', style: S.hint }, q ? 'No folder matches "' + folderFilter + '"' : 'No subfolders here'))
-        }
-        return h('dialog', {
-          className: 'dshg-dialog',
-          style: S.dialog,
-          ref: dialogRef,
-          'aria-labelledby': 'dshg-browse-title',
-          onCancel: () => act.closeBrowser(),
-          onClick: (e) => { if (e && e.target === e.currentTarget) act.closeBrowser() },
-        },
-          // minHeight:0 让这个 flex 子项能真正收缩到内容高度以下（否则 min-height:auto 把它顶开），
-          // overflowY:auto 才是那个滚动容器 —— 矮视口下依然能滚到「Use this folder」。
-          h('div', { style: { display: 'flex', flexDirection: 'column', gap: 10, padding: '14px 16px', minHeight: 0, overflowY: 'auto' } },
-          h('div', { style: S.head },
-            h('h3', { id: 'dshg-browse-title', style: S.title }, 'Choose a folder'),
-            h('span', { style: S.crumb }, browse.path || 'Drives'),
-          ),
-          browse.error ? h('p', { style: S.err, role: 'alert' }, browse.error) : null,
-          browse.message ? h('p', { style: S.ok, role: 'status' }, browse.message) : null,
-          all.length > 12 ? h('input', {
+      const all = browse.path
+        ? (browse.dirs || [])
+        : (browse.drives || []).map((d) => ({ name: d, path: d, dot: false }))
+      const q = String(folderFilter || '').trim().toLowerCase()
+      const filtered = q ? all.filter((d) => String(d.name).toLowerCase().includes(q)) : all
+      const CAP = 150
+      const entries = filtered.slice(0, CAP)
+      const rows = []
+      if (browse.path) {
+        rows.push(h('button', { type: 'button',
+          key: 'up', className: 'dshg-row', style: S.listRow,
+          onClick: act.browseUp,
+          'aria-label': 'Go up to ' + (browse.parent || 'the drive list'),
+        }, h(IconUp), h('span', null, '..  ' + (browse.parent || 'Drives'))))
+      }
+      for (const d of entries) {
+        rows.push(h(FolderRow, {
+          key: d.path,
+          path: d.path,
+          name: d.name,
+          dot: d.dot,
+          onOpen: act.browseInto,
+        }))
+      }
+      if (!entries.length) {
+        rows.push(h('p', { key: 'empty', style: S.hint }, q ? 'No folder matches "' + folderFilter + '"' : 'No subfolders here'))
+      }
+      return h('dialog', {
+        className: 'dshg-dialog',
+        style: S.dialog,
+        ref: dialogRef,
+        'aria-labelledby': 'dshg-browse-title',
+        onCancel: act.closeBrowser,
+        onClick: (e) => { if (e && e.target === e.currentTarget) act.closeBrowser() },
+      },
+        // minHeight:0 让这个 flex 子项能真正收缩到内容高度以下（否则 min-height:auto 把它顶开），
+        // overflowY:auto 才是那个滚动容器 —— 矮视口下依然能滚到「Use this folder」。
+        h('div', { style: { display: 'flex', flexDirection: 'column', gap: 10, padding: '14px 16px', minHeight: 0, overflowY: 'auto' } },
+        h('div', { style: S.head },
+          h('h3', { id: 'dshg-browse-title', style: S.title }, 'Choose a folder'),
+          h('span', { style: S.crumb }, browse.path || 'Drives'),
+        ),
+        // 常驻 live region（同上）。
+        h('p', { style: S.err, role: 'alert' }, browse.error || ''),
+        h('p', { style: S.ok, role: 'status' }, browse.message || ''),
+        all.length > 12 ? h('input', {
+          className: 'dshg-input',
+          style: S.input,
+          placeholder: 'Filter folders…',
+          value: folderFilter,
+          'aria-label': 'Filter folders by name',
+          onChange: (e) => setFolderFilter((e && e.target && e.target.value) || ''),
+        }) : null,
+        h('div', { style: S.list, role: 'group', 'aria-label': 'Folders' }, ...rows),
+        filtered.length > CAP
+          ? h('p', { style: S.caption }, 'Showing first ' + CAP + ' of ' + filtered.length + ' folders — use the filter to narrow down')
+          : null,
+        h('div', { style: S.buttonRow },
+          h('input', {
             className: 'dshg-input',
             style: S.input,
-            placeholder: 'Filter folders…',
-            value: folderFilter,
-            'aria-label': 'Filter folders by name',
-            onChange: (e) => setFolderFilter((e && e.target && e.target.value) || ''),
-          }) : null,
-          h('div', { style: S.list, role: 'group', 'aria-label': 'Folders' }, ...rows),
-          filtered.length > CAP
-            ? h('p', { style: S.caption }, 'Showing first ' + CAP + ' of ' + filtered.length + ' folders — use the filter to narrow down')
-            : null,
-          h('div', { style: S.buttonRow },
-            h('input', {
-              className: 'dshg-input',
-              style: S.input,
-              placeholder: 'new folder name',
-              value: browse.newName || '',
-              'aria-label': 'New folder name',
-              onChange: (e) => act.browseName((e && e.target && e.target.value) || ''),
-            }),
-            h('button', { type: 'button',
-              className: 'dshg-btn',
-              style: S.button,
-              disabled: !browse.path || !String(browse.newName || '').trim(),
-              onClick: () => act.createFolder(),
-            }, 'Create folder'),
-          ),
-          h('div', { style: S.buttonRow },
-            h('button', { type: 'button',
-              className: 'dshg-btn dshg-primary',
-              style: S.buttonPrimary,
-              disabled: !browse.path || !!browse.dotSegment,
-              title: browse.dotSegment ? 'Dot-prefixed path — Ghidra will reject it' : 'Use the folder shown above',
-              onClick: () => act.chooseFolder(),
-            }, 'Use this folder'),
-            h('button', { type: 'button', className: 'dshg-btn', style: S.button, onClick: () => act.closeBrowser() }, 'Cancel'),
-            browse.busy ? h('span', { style: S.hint, role: 'status' }, 'Loading…') : null,
-          ),
-          ),
-        )
-      }
+            placeholder: 'new folder name',
+            value: browse.newName || '',
+            'aria-label': 'New folder name',
+            onChange: (e) => act.browseName((e && e.target && e.target.value) || ''),
+          }),
+          h('button', { type: 'button',
+            className: 'dshg-btn',
+            style: S.button,
+            disabled: !browse.path || !String(browse.newName || '').trim(),
+            onClick: act.createFolder,
+          }, 'Create folder'),
+        ),
+        h('div', { style: S.buttonRow },
+          h('button', { type: 'button',
+            className: 'dshg-btn dshg-primary',
+            style: S.buttonPrimary,
+            disabled: !browse.path || !!browse.dotSegment,
+            title: browse.dotSegment ? 'Dot-prefixed path — Ghidra will reject it' : 'Use the folder shown above',
+            onClick: act.chooseFolder,
+          }, 'Use this folder'),
+          h('button', { type: 'button', className: 'dshg-btn', style: S.button, onClick: act.closeBrowser }, 'Cancel'),
+          browse.busy ? h('span', { style: S.hint, role: 'status' }, 'Loading…') : null,
+        ),
+        ),
+      )
     }
 
     // 这里曾有一个 `face` 对象（hooks + refresh/save/discard/edit/resetField/stopMcp），
